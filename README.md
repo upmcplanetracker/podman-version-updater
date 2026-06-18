@@ -52,9 +52,9 @@
 
 <h2>🚀 Usage</h2>
 
-<h3>1. Clone the repository</h3>
-<pre><code>git clone https://github.com/your-username/your-repo.git
-cd your-repo</code></pre>
+<h3>1. Clone this repository to your machine</h3>
+<pre><code>git clone https://github.com/upmcplanetracker/podman-version-updater.git
+cd podman-version-updater</code></pre>
 
 <h3>2. Make the script executable</h3>
 <pre><code>chmod +x podman-version-updater.sh</code></pre>
