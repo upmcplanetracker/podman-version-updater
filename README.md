@@ -20,8 +20,8 @@
 <h3>🧪 <span style="color:darkorange;">Only tested on Ubuntu 26.04 / Podman 5.7.0 → 5.8.3</span></h3>
 <p>This script was written and validated <strong>exclusively</strong> on:</p>
 <ul>
-  <li><strong>Ubuntu 26.04</strong> (development branch, as of 2026)</li>
-  <li><strong>Podman 5.7.0</strong> (apt‑managed) upgrading to <strong>v5.8.3</strong></li>
+  <li><strong>Ubuntu 26.04</strong></li>
+  <li><strong>Podman 5.7.0</strong> (apt‑managed package installed with 26.04) upgrading to <strong>v5.8.3</strong></li>
 </ul>
 <p><strong>If you are using a different OS, a different Podman base version, or a different target version, you must verify that ALL build dependencies are new enough.</strong> Failing to do so will likely cause a build failure and could leave your system in an inconsistent state.</p>
 
