@@ -192,7 +192,7 @@ if [[ "$FRESH_INSTALL" == true ]]; then
     echo "=============================================================="
     git clone "$REPO_URL" "$WORKDIR"
     cd "$WORKDIR"
-    git checkout "$TAG"
+    git -c advice.detachedHead=false checkout "$TAG"
 
     echo ""
     echo "=============================================================="
@@ -297,7 +297,7 @@ echo "  completes quickly. No output while cloning..."
 echo "=============================================================="
 git clone "$REPO_URL" "$WORKDIR"
 cd "$WORKDIR"
-git checkout "$TAG"
+git -c advice.detachedHead=false checkout "$TAG"
 
 echo ""
 echo "=============================================================="
