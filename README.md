@@ -128,13 +128,17 @@ If you rely on a Docker‑compatible socket (`/var/run/docker.sock`), check that
 
     systemctl --user status podman-docker.socket   # if applicable
 
-#### For Quadlet Users
+####  For Quadlet Users
 
-If your containers are managed by Quadlet (systemd unit files inside `~/.config/containers/systemd/`), the script’s automatic container restart will not bring them back because the units themselves were stopped. To restart all your Quadlet containers, run:
+If your containers are managed by Quadlet (systemd unit files inside `~/.config/containers/systemd/`), the script now restarts them automatically via their systemd units. If you still see stopped containers, manually run:
 
     systemctl --user start $(ls ~/.config/containers/systemd/*.container | xargs -n1 basename | sed 's/\.container$//')
 
-Then verify with `podman ps`. This command starts every unit that corresponds to a `.container` file in your Quadlet directory.
+For rootful Quadlet containers (`/etc/containers/systemd/`), the script does not restart them automatically. After an upgrade, restart them with:
+
+    sudo systemctl restart $(ls /etc/containers/systemd/*.container | xargs -n1 basename | sed 's/\.container$//')
+
+Then verify with `sudo podman ps`.
 
 * * *
 
