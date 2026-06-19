@@ -5,7 +5,7 @@
 <h2>⚠️ <span style="color:red;">IMPORTANT WARNINGS – READ THIS FIRST</span> ⚠️</h2>
 
 <h3>🛑 <span style="color:darkorange;">This process replaces a system‑level binary</span></h3>
-<p>Replacing a core container runtime by compiling from source is a <strong>high‑risk operation</strong>. It worked flawlessly on the author’s machine, but that does <strong>not</strong> guarantee it will work on yours. The script installs a self‑compiled Podman into <code>/usr/local</code>, which <strong>overrides the system package</strong>. This is <strong>not a standard `apt` upgrade</strong> and carries potential for breakage, data loss, or unexpected system behaviour.</p>
+<p>Replacing a core container runtime by compiling from source is a <strong>high‑risk operation</strong>. It worked flawlessly on the author’s machine, but that does <strong>not</strong> guarantee it will work on yours. The script installs a self‑compiled Podman into <code>/usr/local</code>, which <strong>overrides the system package</strong>. This is <strong>not a standard `apt` upgrade</strong> and carries potential for breakage, data loss, or unexpected system behavior.</p>
 
 <h3>📦 <span style="color:darkorange;">Complete backup is mandatory</span></h3>
 <p>Before running this script, you <strong>must</strong> back up:</p>
