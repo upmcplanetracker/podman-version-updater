@@ -369,11 +369,28 @@ if [[ "$USER_SERVICE_WAS_ACTIVE" == true ]]; then
     systemctl --user start podman.service 2>/dev/null || true
 fi
 
-# ── Restart containers that were previously running ───────────────────
+# ── Restart containers that were previously running (user only) ───────
 echo "==> Restarting containers that were previously running..."
+RESTARTED_COUNT=0
+QUADLET_UNITS_STARTED=()
 if [[ -s ~/podman-state-backup.txt ]]; then
-    grep 'Up' ~/podman-state-backup.txt | awk '{print $NF}' | xargs -r -n1 podman start 2>/dev/null || true
-    echo "Container restart completed. Please verify with 'podman ps'."
+    while read -r name; do
+        [[ -z "$name" ]] && continue
+        # Check for user Quadlet file
+        if [[ -f "$HOME/.config/containers/systemd/${name}.container" ]]; then
+            echo "   [Quadlet] starting user unit: ${name}.service"
+            systemctl --user start "${name}.service" 2>/dev/null || true
+            QUADLET_UNITS_STARTED+=("${name}.service")
+        else
+            # Not a Quadlet container, start normally
+            podman start "$name" 2>/dev/null || true
+        fi
+        ((RESTARTED_COUNT++)) || true
+    done < <(grep 'Up' ~/podman-state-backup.txt | awk '{print $NF}')
+    echo "Container restart completed ($RESTARTED_COUNT containers processed)."
+    if [[ ${#QUADLET_UNITS_STARTED[@]} -gt 0 ]]; then
+        echo "Quadlet units started: ${QUADLET_UNITS_STARTED[*]}"
+    fi
 else
     echo "No previous container state backup found. Skipping container restart."
 fi
@@ -393,6 +410,9 @@ echo "     manually with 'podman start <name>' or 'podman start --all'."
 echo "     If your containers are managed by Quadlet (systemd units),"
 echo "     restart them with:"
 echo "       systemctl --user start \$(ls ~/.config/containers/systemd/*.container | xargs -n1 basename | sed 's/\.container\$//')"
+echo "     If you run rootful containers (sudo podman), you must restart"
+echo "     them manually. For root Quadlet containers, use:"
+echo "       sudo systemctl restart \$(ls /etc/containers/systemd/*.container | xargs -n1 basename | sed 's/\.container\$//')"
 echo "     Also verify the podman socket:"
 echo "       systemctl --user status podman.socket"
 echo "     If you use docker.sock compatibility, check that too:"
