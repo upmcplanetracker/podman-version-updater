@@ -65,7 +65,6 @@ if [[ "$1" == "--rollback" ]]; then
         USER_SOCKET_ACTIVE=true
     fi
 
-    # Stop user services if they are running
     echo "==> Stopping any running Podman user services..."
     if [[ "$USER_SERVICE_ACTIVE" == true ]]; then
         systemctl --user stop podman.service 2>/dev/null || true
@@ -263,10 +262,15 @@ echo "==> Will upgrade from $CURRENT_VERSION to $TAG_VERSION."
 echo "==> Saving current state..."
 podman ps -a > ~/podman-state-backup.txt 2>/dev/null || touch ~/podman-state-backup.txt
 
-systemctl --user list-units '*.service' --no-legend \
-    | awk '{print $1}' \
-    | grep -E 'podman|container-' \
-    > ~/podman-services-backup.txt 2>/dev/null || true
+# Record whether the podman socket/service are active (user‑level)
+USER_SOCKET_WAS_ACTIVE=false
+if systemctl --user is-active --quiet podman.socket 2>/dev/null; then
+    USER_SOCKET_WAS_ACTIVE=true
+fi
+USER_SERVICE_WAS_ACTIVE=false
+if systemctl --user is-active --quiet podman.service 2>/dev/null; then
+    USER_SERVICE_WAS_ACTIVE=true
+fi
 
 # ── Install build dependencies ─────────────────────────────────────────
 echo ""
@@ -303,11 +307,14 @@ echo "  Let it finish even if the terminal seems frozen."
 echo "=============================================================="
 make BUILDTAGS="selinux seccomp systemd exclude_graphdriver_devicemapper"
 
-# ── Stop Podman services ──────────────────────────────────────────────
-echo "==> Stopping Podman containers and services safely..."
+# ── Stop Podman services and all containers ───────────────────────────
+echo "==> Stopping all containers and Podman services safely..."
+# Gracefully stop all user containers
 podman stop --all 2>/dev/null || true
+# Stop user‑level Podman socket and service
 systemctl --user stop podman.socket podman.service 2>/dev/null || true
 
+# Optional: rootful Podman
 ROOTFUL_WAS_ACTIVE=false
 if systemctl is-active --quiet podman.service 2>/dev/null; then
     echo "Rootful Podman service detected; stopping it too..."
@@ -342,17 +349,36 @@ which podman
 echo "==> Running database migration (podman system migrate)..."
 podman system migrate --migrate-db || echo "Migration finished (warnings may appear if DB is already migrated)."
 
-# ── Restart saved Podman services ─────────────────────────────────────
-echo "==> Reloading user systemd and restarting saved Podman services..."
+# ── Reload systemd and restart the socket first ───────────────────────
 systemctl --user daemon-reload
 
-if [[ -s ~/podman-services-backup.txt ]]; then
-    while read -r unit; do
-        [[ -z "$unit" ]] && continue
-        systemctl --user start "$unit" 2>/dev/null || true
-    done < ~/podman-services-backup.txt
+if [[ "$USER_SOCKET_WAS_ACTIVE" == true ]]; then
+    echo "==> Restarting podman.socket..."
+    systemctl --user start podman.socket 2>/dev/null || true
+    echo "==> Waiting for podman.socket to be listening..."
+    for i in {1..10}; do
+        if systemctl --user is-active --quiet podman.socket && \
+           systemctl --user status podman.socket | grep -q 'listening'; then
+            break
+        fi
+        sleep 1
+    done
 fi
 
+if [[ "$USER_SERVICE_WAS_ACTIVE" == true ]]; then
+    systemctl --user start podman.service 2>/dev/null || true
+fi
+
+# ── Restart containers that were previously running ───────────────────
+echo "==> Restarting containers that were previously running..."
+if [[ -s ~/podman-state-backup.txt ]]; then
+    grep 'Up' ~/podman-state-backup.txt | awk '{print $NF}' | xargs -r -n1 podman start 2>/dev/null || true
+    echo "Container restart completed. Please verify with 'podman ps'."
+else
+    echo "No previous container state backup found. Skipping container restart."
+fi
+
+# Restart rootful Podman if we stopped it
 if [[ "$ROOTFUL_WAS_ACTIVE" == true ]]; then
     echo "Restarting rootful Podman services..."
     sudo systemctl start podman.socket podman.service 2>/dev/null || true
@@ -361,6 +387,13 @@ fi
 echo ""
 echo "=============================================="
 echo "  Podman successfully updated to $TAG_VERSION!"
-echo "  ** IMPORTANT: If your terminal still shows the old version,"
+echo "  ** IMPORTANT: Always check 'podman ps -a' to confirm all"
+echo "     containers are running. If not, you can restart them"
+echo "     manually with 'podman start <name>' or 'podman start --all'."
+echo "     Also verify the podman socket:"
+echo "       systemctl --user status podman.socket"
+echo "     If you use docker.sock compatibility, check that too:"
+echo "       systemctl --user status podman-docker.socket   (if applicable)"
+echo "  ** If your terminal still shows the old version,"
 echo "     run 'hash -r' or open a new terminal. **"
 echo "=============================================="
