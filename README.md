@@ -1,8 +1,8 @@
 <h1 align="center">Podman Version Updater (Source Build)</h1>
-<p align="center"><strong>Build &amp; install any Podman release from GitHub – without touching your apt‑managed binary</strong></p>
+<p align="center"><strong>Build &amp; install any Podman release from GitHub without touching your apt‑managed binary</strong></p>
 <hr>
 
-<h2>⚠️ <span style="color:red;">IMPORTANT WARNINGS – READ THIS FIRST</span> ⚠️</h2>
+<h2>⚠️ <span style="color:red;">IMPORTANT WARNINGS. READ THIS FIRST</span> ⚠️</h2>
 
 <h3>🛑 <span style="color:darkorange;">This process replaces a system‑level binary</span></h3>
 <p>Replacing a core container runtime by compiling from source is a <strong>high‑risk operation</strong>. It worked flawlessly on the author’s machine, but that does <strong>not</strong> guarantee it will work on yours. The script installs a self‑compiled Podman into <code>/usr/local</code>, which <strong>overrides the system package</strong>. This is <strong>not a standard `apt` upgrade</strong> and carries potential for breakage, data loss, or unexpected system behavior.</p>
