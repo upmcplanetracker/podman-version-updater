@@ -30,15 +30,14 @@
 <ul>
   <li>Read the <a href="https://github.com/containers/podman/blob/main/install.md" target="_blank">official Podman build instructions</a> for the tag you are targeting.</li>
   <li>Check the required versions of <code>go</code>, <code>gpgme</code>, <code>systemd</code>, <code>conmon</code>, etc.</li>
-  <li>If the required versions are newer than what your distribution ships, you must upgrade those manually – the script will not do it for you.</li>
-</ul>
+  <li>If the required versions are newer than what your distribution ships, you must upgrade those manually. The script will not do it for you.</li></ul>
 
 <hr>
 
 <h2>📋 How It Works</h2>
 <ol>
   <li>You give the script a GitHub release‑tag URL and a mode: normal update, fresh install, or rollback.</li>
-  <li>For upgrades it verifies the target version is <strong>newer</strong> than your current one, backs up your running containers and Podman‑related services.</li>
+  <li>For upgrades it verifies the target version is <strong>newer</strong> than your current one, backs up your running containers and Podman related services.</li>
   <li>It installs all required build dependencies via <code>apt</code>.</li>
   <li>It clones the repository, checks out the tag, and compiles Podman.</li>
   <li>It <strong>safely</strong> stops only <code>podman.service</code> and <code>podman.socket</code> (never your login session).</li>
@@ -75,7 +74,7 @@ cd podman-version-updater</code></pre>
 <pre><code>./podman-version-updater.sh --rollback</code></pre>
 <p>Stops any Podman services, removes the compiled files from <code>/usr/local</code>, and restores the system binary. It is safe to run even if no locally built version is present.</p>
 
-<h3>6. After a successful update or fresh install – clear your shell’s command hash</h3>
+<h3>6. After a successful update or fresh install,  clear your shell’s command hash</h3>
 <p><strong>Your terminal may still show the old version number.</strong> This is because your shell cached the old binary’s location. Run one of these:</p>
 <pre><code>hash -r          # in the same terminal
 # or simply open a new terminal window</code></pre>
@@ -90,9 +89,9 @@ cd podman-version-updater</code></pre>
 </p>
 
 <p>The new version is used automatically because <code>/usr/local/bin</code> comes first in your <code>$PATH</code>.
-You can safely keep both – the original binary is untouched and ready as a fallback.</p>
+You can safely keep both. The original binary is untouched and ready as a fallback.</p>
 
-<h3>✅ Option 1 – Keep both (recommended)</h3>
+<h3>✅ Option 1  Keep both (recommended)</h3>
 <p>Do nothing extra. This gives you:</p>
 <ul>
   <li>The latest features from your compiled version.</li>
@@ -100,7 +99,7 @@ You can safely keep both – the original binary is untouched and ready as a fal
   <li>Zero risk of accidentally removing critical runtime dependencies.</li>
 </ul>
 
-<h3>🗑️ Option 2 – Use only the source‑built version (remove the APT package)</h3>
+<h3>🗑️ Option 2  Use only the source‑built version (remove the APT package)</h3>
 <p><strong>Warning:</strong> After doing this, <code>--rollback</code> will <strong>not</strong> work – there will be no fallback binary.</p>
 
 <ol>
@@ -115,19 +114,19 @@ You can safely keep both – the original binary is untouched and ready as a fal
 
 <p>After this, only <code>/usr/local/bin/podman</code> remains. Your containers and images are not affected.</p>
 
-<h3>🔙 Option 3 – Revert completely to the APT version</h3>
+<h3>🔙 Option 3  Revert completely to the APT version</h3>
 <pre><code>./podman-version-updater.sh --rollback</code></pre>
 <p>Stops services, removes compiled files, and restores the original system services. No further cleanup is needed.</p>
 
 <h3>⚠️ What happens if you purge the APT version and then try to roll back?</h3>
-<p><strong>The rollback will fail.</strong> The script will remove the only remaining Podman binary, and then attempt to verify the restored version – but no binary exists. You would need to reinstall the APT package (<code>sudo apt install podman</code>) to recover.</p>
+<p><strong>The rollback will fail.</strong> The script will remove the only remaining Podman binary, and then attempt to verify the restored version but no binary exists. You would need to reinstall the APT package (<code>sudo apt install podman</code>) to recover.</p>
 
 <hr>
 
 <h2>🧹 Cleanup</h2>
 <p>The script creates two backup files in your home directory (during an upgrade, not fresh install):</p>
 <ul>
-  <li><code>~/podman-state-backup.txt</code> – list of running containers before the upgrade.</li>
+  <li><code>~/podman-state-backup.txt</code> - list of running containers before the upgrade.</li>
   <li><code>~/podman-services-backup.txt</code> – Podman/Quadlet service units that were active.</li>
 </ul>
 <p>You can delete them after a successful update, or keep them for reference.</p>
