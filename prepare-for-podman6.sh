@@ -27,7 +27,6 @@ else
     cd netavark
     make build
     sudo cp bin/netavark /usr/local/bin/netavark
-    cd /
     rm -rf "$BUILD_DIR"
     echo "Netavark 2.0.0 installed to /usr/local/bin/netavark"
 fi
@@ -43,7 +42,6 @@ else
     cd aardvark-dns
     make build
     sudo cp bin/aardvark-dns /usr/local/bin/aardvark-dns
-    cd /
     rm -rf "$BUILD_DIR"
     echo "Aardvark-dns 2.0.0 installed to /usr/local/bin/aardvark-dns"
 fi
@@ -70,11 +68,12 @@ runtime = "crun"
 [network]
 network_backend = "netavark"
 CFG
-    cat <<'STOCFG' | sudo tee /etc/containers/storage.conf > /dev/null
+    USER_ID=$(id -u)
+    cat <<STOCFG | sudo tee /etc/containers/storage.conf > /dev/null
 [storage]
 driver = "overlay"
-runroot = "/run/user/$(id -u)/containers"
-graphroot = "/home/$USER/.local/share/containers/storage"
+runroot = "/run/user/${USER_ID}/containers"
+graphroot = "/home/${USER}/.local/share/containers/storage"
 STOCFG
     sudo cp /etc/containers/containers.conf /usr/share/containers/containers.conf
     echo "Minimal rootless config created."
@@ -92,8 +91,8 @@ echo ""
 echo "=============================================="
 echo " Dependencies are ready for Podman v6.0.0!"
 echo " You can now run your Podman upgrade script:"
-echo "   ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v6.0.0"
-echo "   Or ./podman-version-updater.sh --fresh-install https://github.com/podman-container-tools/podman/releases/tag/v6.0.0"
+echo "   ./podman-version-updater.sh https://github.com/containers/podman/releases/tag/v6.0.0"
+echo "   Or ./podman-version-updater.sh --fresh-install https://github.com/containers/podman/releases/tag/v6.0.0"
 echo "=============================================="
 
 # ---------- Optional automatic upgrade ----------
