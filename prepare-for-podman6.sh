@@ -92,9 +92,7 @@ echo ""
 echo "=============================================="
 echo " Dependencies are ready for Podman v6.0.0!"
 echo " You can now run your Podman upgrade script:"
-echo "   ./update.sh https://github.com/containers/podman/releases/tag/v6.0.0"
-echo " Or (your fork):"
-echo "   ./update.sh https://github.com/podman-container-tools/podman/releases/tag/v6.0.0"
+echo "   ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v6.0.0"
 echo "=============================================="
 
 # ---------- Optional automatic upgrade ----------
