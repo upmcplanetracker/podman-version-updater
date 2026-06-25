@@ -22,6 +22,7 @@ if command -v netavark &>/dev/null && [[ "$(netavark --version 2>/dev/null | gre
 else
     echo "==> Building Netavark 2.0.0..."
     BUILD_DIR=$(mktemp -d)
+    trap 'rm -rf "$BUILD_DIR"' EXIT
     cd "$BUILD_DIR"
     git clone --branch v2.0.0 --depth 1 https://github.com/containers/netavark.git
     cd netavark
@@ -37,6 +38,7 @@ if command -v aardvark-dns &>/dev/null && [[ "$(aardvark-dns --version 2>/dev/nu
 else
     echo "==> Building Aardvark-dns 2.0.0..."
     BUILD_DIR=$(mktemp -d)
+    trap 'rm -rf "$BUILD_DIR"' EXIT
     cd "$BUILD_DIR"
     git clone --branch v2.0.0 --depth 1 https://github.com/containers/aardvark-dns.git
     cd aardvark-dns
