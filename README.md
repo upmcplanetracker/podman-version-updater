@@ -25,7 +25,7 @@ The author takes **zero responsibility** for data loss, broken containers, or un
 
 ### 🧪 Only tested on Ubuntu 26.04 / Podman 5.7.0 → 5.8.3
 
-### Podman 6.0.0 is out and this script will attempt to install this version but I do not think Ubuntu 26.04 has the correct dependences yet.
+### Podman 6.0.0 is out but Ubuntu 26.04 doesn't have the minimum dependencies to run it yet so unless you want to manually update Netavark, DNS-Aardvark, etc., 5.8.3 is the newest version you can use with Ubuntu 26.04
 
 This script was written and validated **exclusively** on:
 
