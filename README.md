@@ -1,4 +1,4 @@
-Podman Version Updater (Source Build)
+[Podman](https://github.com/podman-container-tools/podman) Version Updater (Source Build)
 =====================================
 
 **Build and install any Podman release from GitHub without touching your apt‑managed binary.**
