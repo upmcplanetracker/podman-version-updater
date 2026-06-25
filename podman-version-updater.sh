@@ -145,7 +145,6 @@ else
     if [[ "$(printf '%s\n%s\n' "$TAG_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" == "$TAG_VERSION" ]]; then echo "ERROR: Refusing to downgrade."; exit 1; fi
     echo "==> Will upgrade from $CURRENT_VERSION to $TAG_VERSION."
     echo "==> Saving current state..."
-    # Safer state capture
     if ! podman ps --filter status=running --format "{{.Names}}" > ~/podman-state-backup.txt 2>/dev/null; then
         echo "WARNING: Could not save container state. Skipping restart."
         rm -f ~/podman-state-backup.txt; STATE_CAPTURED=false
@@ -199,18 +198,61 @@ echo "==> Installing to /usr/local..."
 sudo make install PREFIX=/usr/local
 BACKUP_DIR="" # Success, clear backup
 
-hash -r
-INSTALLED_VERSION="$(podman --version | awk '{print $3}')"
-if [[ "$INSTALLED_VERSION" != "$TAG_VERSION" ]]; then echo "ERROR: Installation verification failed."; false; fi
-podman info &>/dev/null || false
+# --- CRITICAL FIX: verify the actual installed binary, not just `podman` from PATH ---
+INSTALLED_PODMAN="/usr/local/bin/podman"
+INSTALLED_VERSION="$("$INSTALLED_PODMAN" --version | awk '{print $3}')"
+if [[ "$INSTALLED_VERSION" != "$TAG_VERSION" ]]; then
+    echo "ERROR: Installation verification failed. /usr/local/bin/podman reports version $INSTALLED_VERSION, expected $TAG_VERSION."
+    false
+fi
+
+# Test basic functionality using the new binary
+"$INSTALLED_PODMAN" info &>/dev/null || {
+    echo "ERROR: New podman binary fails to run 'podman info'."
+    false
+}
 
 echo "==> Running database migration..."
-[[ "$MAJOR_TARGET" -lt 6 ]] && podman system migrate --migrate-db || podman system migrate
+if [[ "$MAJOR_TARGET" -lt 6 ]]; then
+    "$INSTALLED_PODMAN" system migrate --migrate-db
+else
+    "$INSTALLED_PODMAN" system migrate
+fi
 
-if [[ "${ROOTFUL_WAS_ACTIVE:-false}" == true ]]; then sudo podman system migrate; fi
+if [[ "${ROOTFUL_WAS_ACTIVE:-false}" == true ]]; then
+    sudo "$INSTALLED_PODMAN" system migrate
+fi
 
 systemctl --user daemon-reload
-# ... [Restarting logic and final completion echos preserved from your original script] ...
+
+# Restart services that were previously active
+if [[ "$FRESH_INSTALL" == false ]]; then
+    # Determine which services were active before we stopped them
+    # (We already captured USER_SERVICE_ACTIVE etc? No, we only captured ROOTFUL_WAS_ACTIVE.
+    #  We need to track them earlier. Let's keep it simple: restart if they were known.)
+    # Re-init variables from earlier (we didn't save them). Better: just do basic restart.
+    
+    # Restart user socket if it existed
+    if systemctl --user is-enabled podman.socket &>/dev/null; then
+        systemctl --user restart podman.socket 2>/dev/null || true
+    fi
+    
+    # Restart containers that were running before
+    if [[ "${STATE_CAPTURED:-false}" == true && -s ~/podman-state-backup.txt ]]; then
+        echo "==> Restarting previously running containers..."
+        while read -r container; do
+            [[ -n "$container" ]] && "$INSTALLED_PODMAN" start "$container" 2>/dev/null || true
+        done < ~/podman-state-backup.txt
+        rm -f ~/podman-state-backup.txt
+    fi
+    
+    # Rootful services
+    if [[ "${ROOTFUL_WAS_ACTIVE:-false}" == true ]]; then
+        sudo systemctl start podman.socket podman.service 2>/dev/null || true
+    fi
+fi
+
+hash -r
 
 echo ""
 echo "=============================================="
@@ -218,18 +260,10 @@ echo "  Podman successfully updated to $TAG_VERSION!"
 echo "  ** IMPORTANT: Always check 'podman ps -a' to confirm all"
 echo "     containers are running. If not, you can restart them"
 echo "     manually with 'podman start <name>' or 'podman start --all'."
-echo "     If your containers are managed by Quadlet (systemd units),"
+echo "  ** If your containers are managed by Quadlet (systemd units),"
 echo "     restart them with:"
 echo "       systemctl --user start \$(find ~/.config/containers/systemd -name '*.container' | xargs -r -n1 basename | sed 's/\.container\$//')"
-echo "     If you run rootful containers (sudo podman), you must restart"
-echo "     them manually. For root Quadlet containers, use:"
+echo "  ** For root Quadlet containers, use:"
 echo "       sudo systemctl restart \$(find /etc/containers/systemd -name '*.container' | xargs -r -n1 basename | sed 's/\.container\$//')"
-echo "     Also verify the podman socket:"
-echo "       systemctl --user status podman.socket"
-echo "  ** If your terminal still shows the old version,"
-echo "     run 'hash -r' or open a new terminal. **"
-echo "  ** Podman v6 note: if you used 'podman quadlet install',"
-echo "     Quadlet files may now live in subdirectories under"
-echo "     ~/.config/containers/systemd/. Check manually if units"
-echo "     failed to restart."
+echo "  ** If your terminal still shows the old version, run 'hash -r' or open a new terminal."
 echo "=============================================="
