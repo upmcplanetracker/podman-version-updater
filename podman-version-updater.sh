@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+# IMPORTANT: If you build netavark/aardvark-dns from source, install them to
+# /usr/local/bin, NOT /usr/local/libexec/podman. The script may delete that
+# directory on rollback or failure.
 set -Eeuo pipefail
 
 # Variable to track binary backup for recovery
@@ -137,37 +141,38 @@ echo "==> Tag        : $TAG (version $TAG_VERSION)"
 
 if [[ $EUID -eq 0 ]]; then echo "ERROR: Run this script as your normal user, not root."; exit 1; fi
 
-# ---------- Check runtime dependencies for Podman v6+ (using dpkg) ----------
+# ---------- Check runtime dependencies for Podman v6+ (binary versions) ----------
 if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "==> Checking required runtime dependencies for Podman v6..."
     MISSING_DEPS=()
 
-    check_pkg_version() {
-        local pkg="$1" required="$2" label="$3"
-        if ! dpkg -s "$pkg" &>/dev/null; then
-            MISSING_DEPS+=("$label package ($pkg) not installed")
+    # Helper: check a command's version output against a minimum version
+    check_binary_version() {
+        local cmd="$1" min_ver="$2" label="$3"
+        if ! command -v "$cmd" &>/dev/null; then
+            MISSING_DEPS+=("$label binary not found in PATH (looked for $cmd)")
             return
         fi
-        local installed_ver
-        installed_ver=$(dpkg -s "$pkg" 2>/dev/null | grep '^Version:' | awk '{print $2}' | cut -d'+' -f1 | cut -d'-' -f1)
-        if [[ -z "$installed_ver" ]]; then
-            MISSING_DEPS+=("$label: cannot determine installed version")
-        elif ! dpkg --compare-versions "$installed_ver" ge "$required"; then
-            MISSING_DEPS+=("$label >= $required (found $installed_ver)")
+        local ver
+        ver=$("$cmd" --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+        if [[ -z "$ver" ]]; then
+            MISSING_DEPS+=("$label: cannot determine version from $cmd --version")
+        elif [[ "$(printf '%s\n%s\n' "$min_ver" "$ver" | sort -V | head -n1)" != "$min_ver" ]]; then
+            MISSING_DEPS+=("$label >= $min_ver (found $ver)")
         fi
     }
 
-    check_pkg_version "netavark" "2.0.0" "netavark"
-    check_pkg_version "aardvark-dns" "2.0.0" "aardvark-dns"
-    check_pkg_version "golang-github-containers-common" "0.68.0" "containers-common"
+    check_binary_version netavark "2.0.0" "netavark"
+    check_binary_version aardvark-dns "2.0.0" "aardvark-dns"
+
+    # containers-common is handled by the config‑file installation later.
+    # No dpkg check needed.
 
     if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
-        echo "ERROR: Your system is missing required runtime dependencies for Podman v6:"
+        echo "ERROR: Missing required runtime dependencies for Podman v6:"
         for dep in "${MISSING_DEPS[@]}"; do echo "  - $dep"; done
         echo ""
-        echo "You can upgrade the dependencies by adding the Kubic repository:"
-        echo "  https://podman.io/docs/installation#ubuntu"
-        echo "Or build an older Podman version (e.g., v5.8.3)."
+        echo "Build netavark & aardvark-dns v2.0.0 manually, or run the dependency upgrade script."
         exit 1
     fi
     echo "==> All runtime dependencies are satisfied."
@@ -235,6 +240,39 @@ fi
 
 echo "==> Installing to /usr/local..."
 sudo make install PREFIX=/usr/local
+# ---------- Install containers-common configuration (needed for v6 rootless) ----------
+if [[ "$MAJOR_TARGET" -ge 6 ]]; then
+    echo "==> Setting up containers configuration for rootless operation..."
+    sudo mkdir -p /etc/containers /usr/share/containers /usr/share/containers/seccomp
+
+    # Try to clone the official common repo at v0.68.0; fallback to minimal config
+    if git clone --depth 1 --branch v0.68.0 https://github.com/containers/common.git /tmp/common-0.68.0 2>/dev/null; then
+        sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /etc/containers/containers.conf
+        sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /usr/share/containers/containers.conf
+        sudo cp /tmp/common-0.68.0/pkg/config/registries.conf /etc/containers/registries.conf
+        sudo cp /tmp/common-0.68.0/pkg/config/storage.conf /etc/containers/storage.conf
+        sudo cp /tmp/common-0.68.0/pkg/seccomp/*.json /usr/share/containers/seccomp/ 2>/dev/null || true
+        rm -rf /tmp/common-0.68.0
+        echo "==> Installed containers-common configs from v0.68.0."
+    else
+        echo "==> v0.68.0 tag not found; creating minimal rootless config."
+        cat <<'CFG' | sudo tee /etc/containers/containers.conf > /dev/null
+[engine]
+events_logger = "journald"
+runtime = "crun"
+[network]
+network_backend = "netavark"
+CFG
+        cat <<'STOCFG' | sudo tee /etc/containers/storage.conf > /dev/null
+[storage]
+driver = "overlay"
+runroot = "/run/user/$(id -u)/containers"
+graphroot = "/home/$USER/.local/share/containers/storage"
+STOCFG
+        sudo cp /etc/containers/containers.conf /usr/share/containers/containers.conf
+        echo "==> Minimal rootless config created."
+    fi
+fi
 BACKUP_DIR="" # Success, clear backup
 
 # ---------- Use absolute path to verify the new binary ----------
