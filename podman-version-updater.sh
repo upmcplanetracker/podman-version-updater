@@ -53,6 +53,7 @@ if [[ $# -lt 1 ]]; then
     usage
 fi
 
+# ---------- ROLLBACK MODE ----------
 if [[ "$1" == "--rollback" ]]; then
     echo "=============================================================="
     echo "  ROLLBACK MODE: Reverting to the apt-managed Podman version"
@@ -104,6 +105,7 @@ if [[ "$1" == "--rollback" ]]; then
     exit 0
 fi
 
+# ---------- FRESH INSTALL / UPGRADE ----------
 if [[ "$1" == "--fresh-install" ]]; then
     if [[ $# -ne 2 ]]; then echo "Usage: $0 --fresh-install <RELEASE_TAG_URL>"; exit 1; fi
     RELEASE_URL="$2"
@@ -135,6 +137,57 @@ echo "==> Tag        : $TAG (version $TAG_VERSION)"
 
 if [[ $EUID -eq 0 ]]; then echo "ERROR: Run this script as your normal user, not root."; exit 1; fi
 
+# ---------- NEW: Check runtime dependencies for Podman v6+ ----------
+if [[ "$MAJOR_TARGET" -ge 6 ]]; then
+    echo "==> Checking required runtime dependencies for Podman v6..."
+    MISSING_DEPS=()
+
+    # Netavark >= 2.0.0
+    if ! command -v netavark &>/dev/null; then
+        MISSING_DEPS+=("netavark (not installed)")
+    else
+        NETAVARK_VER=$(netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+        if [[ -z "$NETAVARK_VER" ]] || [[ "$(printf '%s\n%s\n' "2.0.0" "$NETAVARK_VER" | sort -V | head -n1)" != "2.0.0" ]]; then
+            MISSING_DEPS+=("netavark >= 2.0.0 (found ${NETAVARK_VER:-unknown})")
+        fi
+    fi
+
+    # Aardvark-dns >= 2.0.0
+    if ! command -v aardvark-dns &>/dev/null; then
+        MISSING_DEPS+=("aardvark-dns (not installed)")
+    else
+        AARDVARK_VER=$(aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+        if [[ -z "$AARDVARK_VER" ]] || [[ "$(printf '%s\n%s\n' "2.0.0" "$AARDVARK_VER" | sort -V | head -n1)" != "2.0.0" ]]; then
+            MISSING_DEPS+=("aardvark-dns >= 2.0.0 (found ${AARDVARK_VER:-unknown})")
+        fi
+    fi
+
+    # containers-common >= 0.68.0
+    if ! dpkg -s golang-github-containers-common &>/dev/null; then
+        MISSING_DEPS+=("containers-common package (golang-github-containers-common) not installed")
+    else
+        CC_VER=$(dpkg -s golang-github-containers-common 2>/dev/null | grep '^Version:' | awk '{print $2}' | cut -d'+' -f1)
+        if [[ -z "$CC_VER" ]] || [[ "$(printf '%s\n%s\n' "0.68.0" "$CC_VER" | sort -V | head -n1)" != "0.68.0" ]]; then
+            MISSING_DEPS+=("containers-common >= 0.68.0 (found ${CC_VER:-unknown})")
+        fi
+    fi
+
+    if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
+        echo "ERROR: Your system is missing required runtime dependencies for Podman v6:"
+        for dep in "${MISSING_DEPS[@]}"; do echo "  - $dep"; done
+        echo ""
+        echo "You have two options:"
+        echo "  1) Build an older Podman version that works with your current packages, e.g.:"
+        echo "     $0 https://github.com/containers/podman/releases/tag/v5.8.3"
+        echo "  2) Upgrade the dependencies. See:"
+        echo "     https://podman.io/docs/installation#ubuntu"
+        echo "     (Add the Kubic repository to get Netavark 2.x, Aardvark 2.x, and containers-common 0.68+)"
+        exit 1
+    fi
+    echo "==> All runtime dependencies are satisfied."
+fi
+
+# ---------- Upgrade / fresh install logic ----------
 if [[ "$FRESH_INSTALL" == true ]]; then
     echo "==> Performing a fresh installation (no existing Podman required)."
 else
@@ -198,19 +251,18 @@ echo "==> Installing to /usr/local..."
 sudo make install PREFIX=/usr/local
 BACKUP_DIR="" # Success, clear backup
 
-# --- CRITICAL FIX: verify the actual installed binary, not just `podman` from PATH ---
+# ---------- Use absolute path to verify the new binary ----------
 INSTALLED_PODMAN="/usr/local/bin/podman"
 INSTALLED_VERSION="$("$INSTALLED_PODMAN" --version | awk '{print $3}')"
 if [[ "$INSTALLED_VERSION" != "$TAG_VERSION" ]]; then
-    echo "ERROR: Installation verification failed. /usr/local/bin/podman reports version $INSTALLED_VERSION, expected $TAG_VERSION."
+    echo "ERROR: Installation verification failed. $INSTALLED_PODMAN reports version $INSTALLED_VERSION, expected $TAG_VERSION."
     false
 fi
 
-# Test basic functionality using the new binary
-"$INSTALLED_PODMAN" info &>/dev/null || {
+if ! "$INSTALLED_PODMAN" info &>/dev/null; then
     echo "ERROR: New podman binary fails to run 'podman info'."
     false
-}
+fi
 
 echo "==> Running database migration..."
 if [[ "$MAJOR_TARGET" -lt 6 ]]; then
@@ -227,17 +279,12 @@ systemctl --user daemon-reload
 
 # Restart services that were previously active
 if [[ "$FRESH_INSTALL" == false ]]; then
-    # Determine which services were active before we stopped them
-    # (We already captured USER_SERVICE_ACTIVE etc? No, we only captured ROOTFUL_WAS_ACTIVE.
-    #  We need to track them earlier. Let's keep it simple: restart if they were known.)
-    # Re-init variables from earlier (we didn't save them). Better: just do basic restart.
-    
-    # Restart user socket if it existed
+    # Restart user socket if it was enabled
     if systemctl --user is-enabled podman.socket &>/dev/null; then
         systemctl --user restart podman.socket 2>/dev/null || true
     fi
     
-    # Restart containers that were running before
+    # Restart previously running containers
     if [[ "${STATE_CAPTURED:-false}" == true && -s ~/podman-state-backup.txt ]]; then
         echo "==> Restarting previously running containers..."
         while read -r container; do
@@ -260,10 +307,18 @@ echo "  Podman successfully updated to $TAG_VERSION!"
 echo "  ** IMPORTANT: Always check 'podman ps -a' to confirm all"
 echo "     containers are running. If not, you can restart them"
 echo "     manually with 'podman start <name>' or 'podman start --all'."
-echo "  ** If your containers are managed by Quadlet (systemd units),"
+echo "     If your containers are managed by Quadlet (systemd units),"
 echo "     restart them with:"
 echo "       systemctl --user start \$(find ~/.config/containers/systemd -name '*.container' | xargs -r -n1 basename | sed 's/\.container\$//')"
-echo "  ** For root Quadlet containers, use:"
+echo "     If you run rootful containers (sudo podman), you must restart"
+echo "     them manually. For root Quadlet containers, use:"
 echo "       sudo systemctl restart \$(find /etc/containers/systemd -name '*.container' | xargs -r -n1 basename | sed 's/\.container\$//')"
-echo "  ** If your terminal still shows the old version, run 'hash -r' or open a new terminal."
+echo "     Also verify the podman socket:"
+echo "       systemctl --user status podman.socket"
+echo "  ** If your terminal still shows the old version,"
+echo "     run 'hash -r' or open a new terminal. **"
+echo "  ** Podman v6 note: if you used 'podman quadlet install',"
+echo "     Quadlet files may now live in subdirectories under"
+echo "     ~/.config/containers/systemd/. Check manually if units"
+echo "     failed to restart."
 echo "=============================================="
