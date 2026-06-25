@@ -208,7 +208,8 @@ if [[ "$FRESH_INSTALL" == true ]]; then
 
     hash -r
     echo "==> Verifying the new binary..."
-    INSTALLED_VERSION="$(podman --version | grep -oP '\d+\.\d+\.\d+')"
+    # FIX (issue 1): capture the full version string, e.g., "5.8.3-rc1"
+    INSTALLED_VERSION="$(podman --version | awk '{print $3}')"
     if [[ "$INSTALLED_VERSION" != "$TAG_VERSION" ]]; then
         echo "ERROR: Installation verification failed."
         echo "Expected $TAG_VERSION but got $INSTALLED_VERSION."
@@ -257,7 +258,15 @@ fi
 echo "==> Will upgrade from $CURRENT_VERSION to $TAG_VERSION."
 
 echo "==> Saving current state..."
-podman ps -a > ~/podman-state-backup.txt 2>/dev/null || touch ~/podman-state-backup.txt
+# FIX (issue 5): detect failure to save state, warn and skip automatic restarts
+if ! podman ps -a > ~/podman-state-backup.txt 2>/dev/null; then
+    echo "WARNING: Could not save container state (podman ps failed)."
+    echo "Automatic container restart will be skipped."
+    rm -f ~/podman-state-backup.txt
+    STATE_CAPTURED=false
+else
+    STATE_CAPTURED=true
+fi
 
 USER_SOCKET_WAS_ACTIVE=false
 if systemctl --user is-active --quiet podman.socket 2>/dev/null; then
@@ -335,7 +344,8 @@ sudo make install PREFIX=/usr/local
 
 hash -r
 echo "==> Verifying the new binary..."
-INSTALLED_VERSION="$(podman --version | grep -oP '\d+\.\d+\.\d+')"
+# FIX (issue 1): capture full version string to match pre-release tags
+INSTALLED_VERSION="$(podman --version | awk '{print $3}')"
 if [[ "$INSTALLED_VERSION" != "$TAG_VERSION" ]]; then
     echo "ERROR: Installation verification failed."
     echo "Expected $TAG_VERSION but got $INSTALLED_VERSION."
@@ -357,6 +367,12 @@ if [[ "$MAJOR_VERSION" -lt 6 ]]; then
     podman system migrate --migrate-db || echo "Migration finished (warnings may appear if DB is already migrated)."
 else
     podman system migrate || echo "Migration step complete."
+fi
+
+# FIX (issue 3): run rootful migration if root service was active
+if [[ "$ROOTFUL_WAS_ACTIVE" == true ]]; then
+    echo "==> Running rootful database migration (sudo podman system migrate)..."
+    sudo podman system migrate || echo "Warning: rootful migration encountered issues, but continuing."
 fi
 
 systemctl --user daemon-reload
@@ -381,13 +397,19 @@ fi
 echo "==> Restarting containers that were previously running..."
 RESTARTED_COUNT=0
 QUADLET_UNITS_STARTED=()
-if [[ -s ~/podman-state-backup.txt ]]; then
+# FIX (issue 2 & 5): use label detection for Quadlet, only process if state was captured
+if [[ "$STATE_CAPTURED" == true && -s ~/podman-state-backup.txt ]]; then
     while read -r name; do
         [[ -z "$name" ]] && continue
-        if find "$HOME/.config/containers/systemd" -name "${name}.container" -print -quit | grep -q .; then
-            echo "   [Quadlet] starting user unit: ${name}.service"
-            systemctl --user start "${name}.service" 2>/dev/null || true
-            QUADLET_UNITS_STARTED+=("${name}.service")
+        # FIX (issue 2): check PODMAN_SYSTEMD_UNIT label instead of guessing file name
+        unit=""
+        if podman inspect "$name" &>/dev/null; then
+            unit=$(podman inspect --format '{{index .Config.Labels "PODMAN_SYSTEMD_UNIT"}}' "$name" 2>/dev/null || true)
+        fi
+        if [[ -n "$unit" ]]; then
+            echo "   [Quadlet] starting user unit: $unit"
+            systemctl --user start "$unit" 2>/dev/null || true
+            QUADLET_UNITS_STARTED+=("$unit")
         else
             podman start "$name" 2>/dev/null || true
         fi
@@ -398,7 +420,7 @@ if [[ -s ~/podman-state-backup.txt ]]; then
         echo "Quadlet units started: ${QUADLET_UNITS_STARTED[*]}"
     fi
 else
-    echo "No previous container state backup found. Skipping container restart."
+    echo "No previous container state backup found (or state capture failed). Skipping container restart."
 fi
 
 if [[ "$ROOTFUL_WAS_ACTIVE" == true ]]; then
