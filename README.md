@@ -10,217 +10,201 @@ Podman Version Updater (Source Build)
 
 ### 🛑 This process replaces a system‑level binary
 
-Replacing a core container runtime by compiling from source is a high risk operation. It worked flawlessly on the author’s machine, but that does not guarantee it will work on yours. The script installs a self compiled Podman into `/usr/local`, which overrides the system package. This is not a standard `apt` upgrade and carries potential for breakage, data loss, or unexpected system behaviour.
+Replacing a core container runtime by compiling from source is a high‑risk operation. The script installs a self‑compiled Podman into `/usr/local`, which overrides the system package. This is not a standard `apt` upgrade and carries potential for breakage, data loss, or unexpected system behaviour.
 
 ### 📦 Complete backup is mandatory
 
-Before running this script, you **must** back up:
+Before running any of these scripts, you **must** back up:
 
 *   All container data, volumes, and images.
 *   Your entire home directory, or at least `~/.local/share/containers`.
 *   Any custom Quadlet unit files.
-*   Full system snapshots (using Timeshift, LVM, or similar) if possible.
+*   Full system snapshots (Timeshift, LVM, or similar) if possible.
 
 The author takes **zero responsibility** for data loss, broken containers, or unbootable systems. You assume **all risk**.
 
 ### 🧪 Tested only on Ubuntu 26.04
 
-This script was written and validated **exclusively** on:
+This toolchain was written and validated **exclusively** on:
 
-*   **Ubuntu 26.04**
-*   **Podman 5.7.0** (apt‑managed) upgrading to **v5.8.3**
-*   **Podman 5.8.3** upgrading to **v6.0.0** (with the separate dependency preparation script)
+*   **Ubuntu 26.04 (Resolute)**
+*   **Podman 5.7.0** (apt‑managed) → **5.8.3** (source‑built)
+*   **Podman 5.8.3** (source‑built) → **6.0.0** (source‑built, after running the dependency preparation script)
 
-**If you are using a different OS, a different Podman base version, or a different target version, you must verify that ALL build and runtime dependencies are new enough.** Failing to do so will likely cause a build failure or a broken runtime, and could leave your system in an inconsistent state.
+If you are using a different OS, a different base version, or a different target version, verify that **all** build and runtime dependencies are compatible.
 
 ### 🧩 Dependency version check is YOUR job
 
-The updater script installs build dependencies using the current `apt` packages available on your system. It does not check whether those libraries meet the minimum version required by the Podman version you want to build. Before proceeding:
-
-*   Read the [official Podman build instructions](https://github.com/containers/podman/blob/main/install.md) for the tag you are targeting.
-*   Check the required versions of `go`, `gpgme`, `systemd`, `conmon`, etc.
-*   If the required versions are newer than what your distribution ships, you must upgrade those manually. The script will not do it for you.
+The updater script installs build dependencies via `apt`, but it does **not** verify whether those packages meet the minimum versions required by the Podman release you are building. Always read the [official build instructions](https://github.com/containers/podman/blob/main/install.md) for your target tag and ensure your system’s libraries are new enough.
 
 * * *
 
 📋 How It Works
 ---------------
 
-1.  **Upgrades to 5.8.3 and earlier** – Run the main updater script directly with the desired tag URL. It will handle everything in one step.
-2.  **Upgrades to 6.0.0 and later** – You must first run the `prepare-for-podman6.sh` script to build and install Netavark 2.0.0, Aardvark-dns 2.0.0, and the required containers‑common configuration files. Then run the main updater script as usual.
-3.  For upgrades, the script verifies the target version is newer than your current one, then backs up your running containers and records whether the Podman socket is active.
-4.  It installs all required build dependencies via `apt`.
-5.  It clones the repository, checks out the tag, and compiles Podman.
-6.  It safely stops all containers, then stops `podman.service` and `podman.socket` (never your login session).
-7.  It installs the new binary into `/usr/local`; the original `/usr/bin/podman` remains untouched.
-8.  It runs `podman system migrate` (upgrades only) and verifies the new version.
-9.  It restarts the Podman socket and waits for it to be listening, then restarts every container that was previously running. A final message reminds you to verify everything.
-10. **If anything fails during the build, install, or verification, the script automatically cleans up any partially installed files, leaving your original Podman fully working.**
+*   **For Podman ≤ 5.8.3** – Run the main updater script directly. It clones, builds, installs, migrates the database, and restarts your containers.
+*   **For Podman ≥ 6.0.0** – You must first run the `prepare-for-podman6.sh` script to install **Netavark 2.0.0**, **Aardvark‑dns 2.0.0**, and the required rootless container configuration files. Then run the main updater with the v6.0.0 tag.
+*   The scripts back up your running containers, stop services gracefully, verify the new binary, and restore everything automatically.
+*   **If anything fails, the updater removes any partially installed files and leaves your original Podman untouched.**
+*   The rollback function only removes files placed by the updater script. The dependency binaries installed by the preparation script are **not** removed by `--rollback`. You must revert them manually if desired (see the Rollback section).
 
 * * *
 
 🚀 Usage
 --------
 
-### Get the scripts
+### 1\. Get the scripts
 
-You can either clone this repository or download just the script files:
-
-#### Option A: Clone this repository
-
+    # Clone the repository
     git clone https://github.com/upmcplanetracker/podman-version-updater.git
     cd podman-version-updater
-
-#### Option B: Download just the scripts
-
+    
+    # Or download just the two required files
     wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/podman-version-updater.sh
     wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/prepare-for-podman6.sh
-    # or
-    curl -O https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/podman-version-updater.sh
-    curl -O https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/prepare-for-podman6.sh
-
-### Make them executable
-
     chmod +x podman-version-updater.sh prepare-for-podman6.sh
 
----
+* * *
 
 ### 🔹 Upgrading to Podman 5.8.3 (or any version < 6.0.0)
 
     ./podman-version-updater.sh https://github.com/containers/podman/releases/tag/v5.8.3
 
-For a future release, just change the URL.
+No additional preparation is needed. The script will build, install, and verify Podman in one step.
 
----
+* * *
 
 ### 🔸 Upgrading to Podman 6.0.0 (or any version ≥ 6.0.0)
 
-**First, prepare the required runtime dependencies** (Netavark 2.0.0, Aardvark-dns 2.0.0, and rootless config files):
+**Important:** These steps **must be performed in the same maintenance window**, back‑to‑back. Running the preparation script and then delaying the Podman upgrade may cause the old Podman to pick up the new network stack, leading to unexpected behaviour.
+
+#### Step A – Prepare dependencies
 
     ./prepare-for-podman6.sh
 
-This script is idempotent – you can run it multiple times safely. It installs the new binaries into `/usr/local/bin` and creates `/etc/containers/containers.conf` and `storage.conf` for rootless operation.
+This script does **not** touch your running containers. It will:
 
-**Then, run the main updater** with the v6.0.0 tag:
+*   Install build tools (`cargo`, `protoc`, `git`).
+*   Clone, build, and install **Netavark 2.0.0** → `/usr/local/bin/netavark`
+*   Clone, build, and install **Aardvark‑dns 2.0.0** → `/usr/local/bin/aardvark-dns`
+*   Create rootless container configuration files in `/etc/containers` (storage.conf, containers.conf).
+
+It is safe to run multiple times.
+
+#### Step B – Upgrade Podman
 
     ./podman-version-updater.sh https://github.com/containers/podman/releases/tag/v6.0.0
 
-(If you are building from a fork, replace the URL with your fork’s release tag.)
+This will stop your containers, build Podman v6.0.0 from source, install it, migrate the database, and restart your containers. The script will verify that the new binary works correctly before finishing.
 
-**Optional one‑shot mode:** If you provide the path to the updater script and the tag URL, `prepare-for-podman6.sh` will automatically run the upgrade after preparing dependencies:
+#### ⚠️ What if I must delay the Podman upgrade after running the prepare script?
 
-    ./prepare-for-podman6.sh ./podman-version-updater.sh https://github.com/containers/podman/releases/tag/v6.0.0
+If you cannot upgrade Podman immediately, **rename the new binaries** so Podman 5.8.3 does not see them:
 
----
+    sudo mv /usr/local/bin/netavark /usr/local/bin/netavark-2.0.0
+    sudo mv /usr/local/bin/aardvark-dns /usr/local/bin/aardvark-dns-2.0.0
 
-### Fresh install (no Podman installed yet)
+Later, when you are ready to upgrade, move them back:
+
+    sudo mv /usr/local/bin/netavark-2.0.0 /usr/local/bin/netavark
+    sudo mv /usr/local/bin/aardvark-dns-2.0.0 /usr/local/bin/aardvark-dns
+
+This ensures the old Podman keeps using the original system binaries until you are ready.
+
+* * *
+
+### 🌱 Fresh install (no Podman installed yet)
+
+For a fresh installation of a version **below 6.0.0**:
 
     ./podman-version-updater.sh --fresh-install https://github.com/containers/podman/releases/tag/v5.8.3
 
-This will install all necessary runtime dependencies, then build and install Podman from source. For a fresh install of v6.0.0, run the `prepare-for-podman6.sh` script first.
+For a **fresh install of Podman 6.0.0**, first run the preparation script:
 
-### Rollback to the original apt‑managed Podman
+    ./prepare-for-podman6.sh
+    ./podman-version-updater.sh --fresh-install https://github.com/containers/podman/releases/tag/v6.0.0
+
+* * *
+
+### 🔙 Rollback to the original apt‑managed Podman
 
     ./podman-version-updater.sh --rollback
 
-Stops any Podman services, removes the compiled files from `/usr/local`, and restores the system binary. It is safe to run even if no locally built version is present.
+This stops any Podman services, removes the compiled Podman files from `/usr/local`, and restores the system binary from `/usr/bin/podman`. It is safe even if no local version is installed.
 
-### After a successful update or fresh install: clear your shell’s command hash
+**However, the rollback does NOT remove the custom Netavark / Aardvark‑dns binaries installed by the preparation script.** Those remain in `/usr/local/bin`. If you want to completely revert to the stock Ubuntu‑shipped network stack, run these additional commands after the rollback:
 
-Your terminal may still show the old version number because your shell cached the old binary’s location. Run one of these:
+    # Remove the custom binaries
+    sudo rm -f /usr/local/bin/netavark /usr/local/bin/aardvark-dns
+    
+    # Reinstall the original APT packages to restore the default binaries
+    sudo apt install --reinstall netavark aardvark-dns
+
+After this, `netavark --version` and `aardvark-dns --version` will show the original 1.16.x versions, and Podman will use the default paths.
+
+* * *
+
+### 🔄 After a successful upgrade: clear your shell’s command hash
 
     hash -r          # in the same terminal
     # or simply open a new terminal window
 
-### After the upgrade: check your containers and sockets
+Then verify:
 
-The script restarts all containers that were running before the upgrade, but you should still verify:
+    podman --version
+    podman ps -a
+    systemctl --user status podman.socket
+
+* * *
+
+### 🧪 Verify your containers and networks
+
+The script restarts all containers that were previously running, but you should always confirm:
 
     podman ps -a
 
-If any containers are stopped, start them with:
+If any containers are stopped, start them manually:
 
     podman start --all
 
-Also ensure the Podman socket is active (important for API‑based tools like Homepage or Portainer):
+For Quadlet users, check that the systemd units are active:
 
-    systemctl --user status podman.socket
-
-If it is not running, start it with:
-
-    systemctl --user start podman.socket
-
-Some containers connect to the socket only once at startup; restart them manually if they fail after the upgrade.
-
-If you rely on a Docker‑compatible socket (`/var/run/docker.sock`), check that as well:
-
-    systemctl --user status podman-docker.socket   # if applicable
-
-####  For Quadlet Users
-
-If your containers are managed by Quadlet (systemd unit files inside `~/.config/containers/systemd/`), the script now restarts them automatically via their systemd units. If you still see stopped containers, manually run:
-
-    systemctl --user start $(ls ~/.config/containers/systemd/*.container | xargs -n1 basename | sed 's/\.container$//')
-
-For rootful Quadlet containers (`/etc/containers/systemd/`), the script does not restart them automatically. After an upgrade, restart them with:
-
-    sudo systemctl restart $(ls /etc/containers/systemd/*.container | xargs -n1 basename | sed 's/\.container$//')
-
-Then verify with `sudo podman ps`.
+    systemctl --user status $(basename -s .container ~/.config/containers/systemd/*.container)
+    # or for rootful Quadlets
+    sudo systemctl status $(basename -s .container /etc/containers/systemd/*.container)
 
 * * *
 
 🔄 Managing Installed Podman Versions
 -------------------------------------
 
-After running the updater, your system may have **two** Podman versions:
+After the updater runs, you may have two Podman versions:
 
-*   **Source‑built** (e.g., 5.8.3 or 6.0.0) at `/usr/local/bin/podman`.
-*   **APT‑managed** (e.g., 5.7.0) at `/usr/bin/podman`.
+*   **Source‑built** (e.g., 5.8.3 or 6.0.0) at `/usr/local/bin/podman`
+*   **APT‑managed** (e.g., 5.7.0) at `/usr/bin/podman`
 
-The new version is used automatically because `/usr/local/bin` comes first in your `$PATH`. You can safely keep both: the original binary is untouched and ready as a fallback.
+The new version is used because `/usr/local/bin` comes first in `$PATH`.
 
-### ✅ Option 1: Keep both (recommended)
+*   **Keep both (recommended):** The original binary stays as a fallback; rollback is instant.
+*   **Remove the APT version:**
 
-Do nothing extra. This gives you the latest features from your compiled version, instant rollback with `--rollback`, and zero risk of accidentally removing critical runtime dependencies.
+    sudo apt-mark manual conmon crun netavark uidmap catatonit
+    sudo apt purge podman
 
-### 🗑️ Option 2: Use only the source‑built version (remove the APT package)
+After this, rollback will **not** work because there is no fallback binary.
 
-**Warning:** After doing this, `--rollback` will **not** work because there will be no fallback binary.
-
-1.  Ensure the source‑built version is working correctly.
-2.  **Mark the runtime dependencies as manually installed** so APT will not auto‑remove them:
-    
-        sudo apt-mark manual conmon crun netavark uidmap catatonit
-    
-3.  Remove the APT package:
-    
-        sudo apt purge podman
-    
-
-After this, only `/usr/local/bin/podman` remains. Your containers and images are not affected.
-
-### 🔙 Option 3: Revert completely to the APT version
-
-    ./podman-version-updater.sh --rollback
-
-Stops services, removes compiled files, and restores the original system services. No further cleanup is needed.
-
-### ⚠️ What happens if you purge the APT version and then try to roll back?
-
-**The rollback will fail.** The script will remove the only remaining Podman binary, leaving you with no Podman at all. You would need to reinstall the APT package (`sudo apt install podman`) to recover.
+*   **Revert completely:** Run `--rollback`, then remove any custom network binaries as described above.
 
 * * *
 
 🧹 Cleanup
 ----------
 
-The scripts create temporary files during the upgrade:
+The scripts create temporary files that can be safely deleted after a successful upgrade:
 
-*   `~/podman-state-backup.txt`: full list of containers with states before the upgrade.
-*   `prepare-for-podman6.sh` clones and builds inside `/tmp`, which is cleared automatically on reboot.
-
-You can delete the state backup after a successful update or keep it for reference.
+*   `~/podman-state-backup.txt` – container state snapshot.
+*   `/tmp/podman-build.*` – build directories (cleared automatically on reboot).
+*   `/tmp/common-0.68.0` – temporary clone of config files (if cloned).
 
 * * *
 
