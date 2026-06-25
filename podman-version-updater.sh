@@ -142,7 +142,6 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "==> Checking required runtime dependencies for Podman v6..."
     MISSING_DEPS=()
 
-    # Helper function to compare versions using dpkg --compare-versions
     check_pkg_version() {
         local pkg="$1" required="$2" label="$3"
         if ! dpkg -s "$pkg" &>/dev/null; then
