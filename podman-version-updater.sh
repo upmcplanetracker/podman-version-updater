@@ -137,51 +137,38 @@ echo "==> Tag        : $TAG (version $TAG_VERSION)"
 
 if [[ $EUID -eq 0 ]]; then echo "ERROR: Run this script as your normal user, not root."; exit 1; fi
 
-# ---------- NEW: Check runtime dependencies for Podman v6+ ----------
+# ---------- Check runtime dependencies for Podman v6+ (using dpkg) ----------
 if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "==> Checking required runtime dependencies for Podman v6..."
     MISSING_DEPS=()
 
-    # Netavark >= 2.0.0
-    if ! command -v netavark &>/dev/null; then
-        MISSING_DEPS+=("netavark (not installed)")
-    else
-        NETAVARK_VER=$(netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
-        if [[ -z "$NETAVARK_VER" ]] || [[ "$(printf '%s\n%s\n' "2.0.0" "$NETAVARK_VER" | sort -V | head -n1)" != "2.0.0" ]]; then
-            MISSING_DEPS+=("netavark >= 2.0.0 (found ${NETAVARK_VER:-unknown})")
+    # Helper function to compare versions using dpkg --compare-versions
+    check_pkg_version() {
+        local pkg="$1" required="$2" label="$3"
+        if ! dpkg -s "$pkg" &>/dev/null; then
+            MISSING_DEPS+=("$label package ($pkg) not installed")
+            return
         fi
-    fi
+        local installed_ver
+        installed_ver=$(dpkg -s "$pkg" 2>/dev/null | grep '^Version:' | awk '{print $2}' | cut -d'+' -f1 | cut -d'-' -f1)
+        if [[ -z "$installed_ver" ]]; then
+            MISSING_DEPS+=("$label: cannot determine installed version")
+        elif ! dpkg --compare-versions "$installed_ver" ge "$required"; then
+            MISSING_DEPS+=("$label >= $required (found $installed_ver)")
+        fi
+    }
 
-    # Aardvark-dns >= 2.0.0
-    if ! command -v aardvark-dns &>/dev/null; then
-        MISSING_DEPS+=("aardvark-dns (not installed)")
-    else
-        AARDVARK_VER=$(aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
-        if [[ -z "$AARDVARK_VER" ]] || [[ "$(printf '%s\n%s\n' "2.0.0" "$AARDVARK_VER" | sort -V | head -n1)" != "2.0.0" ]]; then
-            MISSING_DEPS+=("aardvark-dns >= 2.0.0 (found ${AARDVARK_VER:-unknown})")
-        fi
-    fi
-
-    # containers-common >= 0.68.0
-    if ! dpkg -s golang-github-containers-common &>/dev/null; then
-        MISSING_DEPS+=("containers-common package (golang-github-containers-common) not installed")
-    else
-        CC_VER=$(dpkg -s golang-github-containers-common 2>/dev/null | grep '^Version:' | awk '{print $2}' | cut -d'+' -f1)
-        if [[ -z "$CC_VER" ]] || [[ "$(printf '%s\n%s\n' "0.68.0" "$CC_VER" | sort -V | head -n1)" != "0.68.0" ]]; then
-            MISSING_DEPS+=("containers-common >= 0.68.0 (found ${CC_VER:-unknown})")
-        fi
-    fi
+    check_pkg_version "netavark" "2.0.0" "netavark"
+    check_pkg_version "aardvark-dns" "2.0.0" "aardvark-dns"
+    check_pkg_version "golang-github-containers-common" "0.68.0" "containers-common"
 
     if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
         echo "ERROR: Your system is missing required runtime dependencies for Podman v6:"
         for dep in "${MISSING_DEPS[@]}"; do echo "  - $dep"; done
         echo ""
-        echo "You have two options:"
-        echo "  1) Build an older Podman version that works with your current packages, e.g.:"
-        echo "     $0 https://github.com/containers/podman/releases/tag/v5.8.3"
-        echo "  2) Upgrade the dependencies. See:"
-        echo "     https://podman.io/docs/installation#ubuntu"
-        echo "     (Add the Kubic repository to get Netavark 2.x, Aardvark 2.x, and containers-common 0.68+)"
+        echo "You can upgrade the dependencies by adding the Kubic repository:"
+        echo "  https://podman.io/docs/installation#ubuntu"
+        echo "Or build an older Podman version (e.g., v5.8.3)."
         exit 1
     fi
     echo "==> All runtime dependencies are satisfied."
