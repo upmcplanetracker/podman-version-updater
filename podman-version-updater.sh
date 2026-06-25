@@ -239,6 +239,7 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "==> Setting up containers configuration for rootless operation..."
     sudo mkdir -p /etc/containers /usr/share/containers /usr/share/containers/seccomp
 
+    # Try to clone the official common repo at v0.68.0; fallback to minimal config
     if git clone --depth 1 --branch v0.68.0 https://github.com/containers/common.git /tmp/common-0.68.0 2>/dev/null; then
         sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /etc/containers/containers.conf
         sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /usr/share/containers/containers.conf
@@ -263,20 +264,31 @@ runroot = "/run/user/$(id -u)/containers"
 graphroot = "/home/$USER/.local/share/containers/storage"
 STOCFG
         sudo cp /etc/containers/containers.conf /usr/share/containers/containers.conf
+        sudo cp /etc/containers/storage.conf /usr/share/containers/storage.conf
         echo "==> Minimal rootless config created."
     fi
+
+    # Set proper ownership for rootless access
+    sudo chown -R root:root /etc/containers
+    sudo chmod 755 /etc/containers
+    sudo chmod 644 /etc/containers/*.conf 2>/dev/null || true
 fi
 
 # ---------- Use absolute path to verify the new binary ----------
 INSTALLED_PODMAN="/usr/local/bin/podman"
-INSTALLED_VERSION="$("$INSTALLED_PODMAN" --version | awk '{print $3}')"
+
+# First, do a quick version check
+INSTALLED_VERSION="$("$INSTALLED_PODMAN" --version 2>/dev/null | awk '{print $3}' || echo "")"
 if [[ "$INSTALLED_VERSION" != "$TAG_VERSION" ]]; then
-    echo "ERROR: Installation verification failed. $INSTALLED_PODMAN reports version $INSTALLED_VERSION, expected $TAG_VERSION."
+    echo "ERROR: Installation verification failed. $INSTALLED_PODMAN reports version ${INSTALLED_VERSION:-unknown}, expected $TAG_VERSION."
     false
 fi
 
+# Now test podman info with debug output on failure
+echo "==> Verifying new Podman binary..."
 if ! "$INSTALLED_PODMAN" info &>/dev/null; then
-    echo "ERROR: New podman binary fails to run 'podman info'."
+    echo "ERROR: New podman binary fails to run 'podman info'. Debug output:"
+    "$INSTALLED_PODMAN" --log-level=debug info 2>&1 | tail -20 || true
     false
 fi
 
