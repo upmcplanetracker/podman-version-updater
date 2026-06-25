@@ -266,17 +266,17 @@ echo "=============================================================="
 echo "  Installing build dependencies via apt. This may take"
 echo "  a few minutes with little visible output. Please wait..."
 echo "=============================================================="
-    MAJOR_TARGET="$(echo "$TAG_VERSION" | cut -d. -f1)"
-    if [[ "$MAJOR_TARGET" -ge 6 ]]; then
-        echo ""
-        echo "=============================================================="
-        echo "  NOTE: Podman v6 requires Netavark/Aardvark v2.0.0+ and"
-        echo "  containers-common v0.68.0+. The apt packages on your system"
-        echo "  may be too old. If the build fails or 'podman info' errors"
-        echo "  after install, check:"
-        echo "    apt-cache policy netavark golang-github-containers-common"
-        echo "=============================================================="
-    fi
+MAJOR_TARGET="$(echo "$TAG_VERSION" | cut -d. -f1)"
+if [[ "$MAJOR_TARGET" -ge 6 ]]; then
+    echo ""
+    echo "=============================================================="
+    echo "  NOTE: Podman v6 requires Netavark/Aardvark v2.0.0+ and"
+    echo "  containers-common v0.68.0+. The apt packages on your system"
+    echo "  may be too old. If the build fails or 'podman info' errors"
+    echo "  after install, check:"
+    echo "    apt-cache policy netavark golang-github-containers-common"
+    echo "=============================================================="
+fi
 sudo apt update
 sudo apt install -y \
     golang-github-containers-common \
