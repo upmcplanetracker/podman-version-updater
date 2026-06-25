@@ -25,6 +25,8 @@ The author takes **zero responsibility** for data loss, broken containers, or un
 
 ### 🧪 Only tested on Ubuntu 26.04 / Podman 5.7.0 → 5.8.3
 
+### Podman 6.0.0 is out and this script will attempt to install this version but I do not think Ubuntu 26.04 has the correct dependences yet.
+
 This script was written and validated **exclusively** on:
 
 *   **Ubuntu 26.04**
