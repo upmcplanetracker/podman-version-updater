@@ -194,12 +194,16 @@ echo "=============================================================="
 echo "  Installing build dependencies via apt. This may take"
 echo "  a few minutes with little visible output. Please wait..."
 echo "=============================================================="
+
 if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "  NOTE: Podman v6 requires Netavark/Aardvark v2.0.0+ and containers-common v0.68.0+."
 fi
+# netavark and aardvark-dns are intentionally excluded here —
+# for Podman v6, versions 2.0.0+ are required and must be built
+# from source via prepare-for-podman6.sh before running this script.
 sudo apt update
-sudo apt install -y golang-github-containers-common git golang-go make gcc pkg-config libgpgme-dev libassuan-dev libseccomp-dev libdevmapper-dev libglib2.0-dev libsystemd-dev libselinux1-dev libapparmor-dev libbtrfs-dev btrfs-progs conmon crun netavark aardvark-dns passt nftables uidmap libsubid-dev
-
+sudo apt install -y golang-github-containers-common git golang-go make gcc pkg-config libgpgme-dev libassuan-dev libseccomp-dev libdevmapper-dev libglib2.0-dev libsystemd-dev libselinux1-dev libapparmor-dev libbtrfs-dev btrfs-progs conmon crun passt nftables uidmap libsubid-dev
+ROOTFUL_WAS_ACTIVE=false
 # Go version check
 GO_VERSION=$(go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || true)
 if [[ -z "$GO_VERSION" ]] || [[ "$(printf '%s\n%s\n' "$MIN_GO_VERSION" "$GO_VERSION" | sort -V | head -n1)" != "$MIN_GO_VERSION" ]]; then
@@ -208,6 +212,7 @@ if [[ -z "$GO_VERSION" ]] || [[ "$(printf '%s\n%s\n' "$MIN_GO_VERSION" "$GO_VERS
 fi
 
 WORKDIR="$(mktemp -d /tmp/podman-build.XXXXXX)"
+
 git clone "$REPO_URL" "$WORKDIR"
 cd "$WORKDIR"
 git -c advice.detachedHead=false checkout "$TAG"
@@ -257,10 +262,11 @@ runtime = "crun"
 [network]
 network_backend = "netavark"
 CFG
-        cat <<'STOCFG' | sudo tee /etc/containers/storage.conf > /dev/null
+        USER_ID=$(id -u)
+        cat <<STOCFG | sudo tee /etc/containers/storage.conf > /dev/null
 [storage]
 driver = "overlay"
-runroot = "/run/user/$(id -u)/containers"
+runroot = "/run/user/${USER_ID}/containers"
 graphroot = "/home/$USER/.local/share/containers/storage"
 STOCFG
         sudo cp /etc/containers/containers.conf /usr/share/containers/containers.conf
@@ -325,6 +331,8 @@ if [[ "$FRESH_INSTALL" == false ]]; then
 fi
 
 hash -r
+
+rm -rf "$WORKDIR"
 
 echo ""
 echo "=============================================="
