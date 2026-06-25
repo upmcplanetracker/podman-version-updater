@@ -384,7 +384,7 @@ QUADLET_UNITS_STARTED=()
 if [[ -s ~/podman-state-backup.txt ]]; then
     while read -r name; do
         [[ -z "$name" ]] && continue
-        if [[ -f "$HOME/.config/containers/systemd/${name}.container" ]]; then
+        if find "$HOME/.config/containers/systemd" -name "${name}.container" -print -quit | grep -q .; then
             echo "   [Quadlet] starting user unit: ${name}.service"
             systemctl --user start "${name}.service" 2>/dev/null || true
             QUADLET_UNITS_STARTED+=("${name}.service")
@@ -414,10 +414,10 @@ echo "     containers are running. If not, you can restart them"
 echo "     manually with 'podman start <name>' or 'podman start --all'."
 echo "     If your containers are managed by Quadlet (systemd units),"
 echo "     restart them with:"
-echo "       systemctl --user start \$(find ~/.config/containers/systemd -name '*.container' | xargs -n1 basename | sed 's/\.container\$//')"
+echo "       systemctl --user start \$(find ~/.config/containers/systemd -name '*.container' | xargs -r -n1 basename | sed 's/\.container\$//')"
 echo "     If you run rootful containers (sudo podman), you must restart"
 echo "     them manually. For root Quadlet containers, use:"
-echo "       sudo systemctl restart \$(ls /etc/containers/systemd/*.container | xargs -n1 basename | sed 's/\.container\$//')"
+echo "       sudo systemctl restart \$(find /etc/containers/systemd -name '*.container' | xargs -r -n1 basename | sed 's/\.container\$//')"
 echo "     Also verify the podman socket:"
 echo "       systemctl --user status podman.socket"
 echo "     If you use docker.sock compatibility, check that too:"
