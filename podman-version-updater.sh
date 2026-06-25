@@ -9,7 +9,6 @@ cleanup_on_failure() {
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     echo "ERROR: Something went wrong. The script will now clean up any"
     echo "partially installed files so your existing Podman keeps working."
-    
     # Restore from backup if an upgrade was in progress
     if [[ -n "${BACKUP_DIR:-}" && -d "$BACKUP_DIR" ]] && [ "$(ls -A "$BACKUP_DIR")" ]; then
         echo "Restoring your previously installed Podman binaries..."
@@ -23,7 +22,7 @@ cleanup_on_failure() {
         sudo rm -rf /usr/local/share/man/man1/podman* 2>/dev/null || true
     fi
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    
+    [[ -n "${WORKDIR:-}" && -d "${WORKDIR}" ]] && rm -rf "$WORKDIR" || true    
     systemctl --user daemon-reload 2>/dev/null || true
     hash -r
     if command -v podman &>/dev/null; then
