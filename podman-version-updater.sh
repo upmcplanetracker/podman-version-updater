@@ -157,6 +157,17 @@ if [[ "$FRESH_INSTALL" == true ]]; then
     echo "  Installing build dependencies via apt. This may take"
     echo "  a few minutes with little visible output. Please wait..."
     echo "=============================================================="
+    MAJOR_TARGET="$(echo "$TAG_VERSION" | cut -d. -f1)"
+    if [[ "$MAJOR_TARGET" -ge 6 ]]; then
+        echo ""
+        echo "=============================================================="
+        echo "  NOTE: Podman v6 requires Netavark/Aardvark v2.0.0+ and"
+        echo "  containers-common v0.68.0+. The apt packages on your system"
+        echo "  may be too old. If the build fails or 'podman info' errors"
+        echo "  after install, check:"
+        echo "    apt-cache policy netavark golang-github-containers-common"
+        echo "=============================================================="
+    fi
     sudo apt update
     sudo apt install -y \
         golang-github-containers-common \
@@ -229,7 +240,8 @@ if [[ "$CURRENT_VERSION" == "$TAG_VERSION" ]]; then
     exit 0
 fi
 
-if printf '%s\n%s\n' "$TAG_VERSION" "$CURRENT_VERSION" | sort -V | head -n1 | grep -q "$TAG_VERSION"; then
+if [[ "$(printf '%s\n%s\n' "$TAG_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" == "$TAG_VERSION" ]] && \
+   [[ "$TAG_VERSION" != "$CURRENT_VERSION" ]]; then
     echo "ERROR: Target version ($TAG_VERSION) is not newer than current ($CURRENT_VERSION)."
     echo "Refusing to downgrade."
     exit 1
@@ -254,6 +266,17 @@ echo "=============================================================="
 echo "  Installing build dependencies via apt. This may take"
 echo "  a few minutes with little visible output. Please wait..."
 echo "=============================================================="
+    MAJOR_TARGET="$(echo "$TAG_VERSION" | cut -d. -f1)"
+    if [[ "$MAJOR_TARGET" -ge 6 ]]; then
+        echo ""
+        echo "=============================================================="
+        echo "  NOTE: Podman v6 requires Netavark/Aardvark v2.0.0+ and"
+        echo "  containers-common v0.68.0+. The apt packages on your system"
+        echo "  may be too old. If the build fails or 'podman info' errors"
+        echo "  after install, check:"
+        echo "    apt-cache policy netavark golang-github-containers-common"
+        echo "=============================================================="
+    fi
 sudo apt update
 sudo apt install -y \
     golang-github-containers-common \
@@ -315,7 +338,12 @@ podman --version
 which podman
 
 echo "==> Running database migration (podman system migrate)..."
-podman system migrate --migrate-db || echo "Migration finished (warnings may appear if DB is already migrated)."
+MAJOR_VERSION="$(echo "$INSTALLED_VERSION" | cut -d. -f1)"
+if [[ "$MAJOR_VERSION" -lt 6 ]]; then
+    podman system migrate --migrate-db || echo "Migration finished (warnings may appear if DB is already migrated)."
+else
+    podman system migrate || echo "Migration step complete."
+fi
 
 systemctl --user daemon-reload
 
@@ -382,4 +410,8 @@ echo "     If you use docker.sock compatibility, check that too:"
 echo "       systemctl --user status podman-docker.socket   (if applicable)"
 echo "  ** If your terminal still shows the old version,"
 echo "     run 'hash -r' or open a new terminal. **"
+echo "  ** Podman v6 note: if you used 'podman quadlet install',"
+echo "     Quadlet files may now live in subdirectories under"
+echo "     ~/.config/containers/systemd/. Check manually if units"
+echo "     failed to restart."
 echo "=============================================="
