@@ -175,8 +175,15 @@ if [[ "$FRESH_INSTALL" == true ]]; then
         libgpgme-dev libassuan-dev libseccomp-dev \
         libdevmapper-dev libglib2.0-dev libsystemd-dev \
         libselinux1-dev libapparmor-dev libbtrfs-dev \
-        btrfs-progs conmon crun netavark \
-        uidmap libsubid-dev
+        btrfs-progs conmon crun netavark aardvark-dns \
+        passt nftables uidmap libsubid-dev
+
+    GO_VERSION=$(go version | grep -oP 'go1\.\d+' | head -1)
+    if [[ "$(printf '%s\n%s\n' "go1.25" "$GO_VERSION" | sort -V | head -n1)" != "go1.25" ]]; then
+        echo "ERROR: Podman v6 requires Go 1.25 or higher. You have $GO_VERSION."
+        echo "Please update your Go installation (e.g., via the official Go tarball or a PPA) before continuing."
+       exit 1
+    fi
 
     WORKDIR="$(mktemp -d /tmp/podman-build.XXXXXX)"
     echo ""
@@ -279,13 +286,20 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
 fi
 sudo apt update
 sudo apt install -y \
-    golang-github-containers-common \
-    git golang-go make gcc pkg-config \
-    libgpgme-dev libassuan-dev libseccomp-dev \
-    libdevmapper-dev libglib2.0-dev libsystemd-dev \
-    libselinux1-dev libapparmor-dev libbtrfs-dev \
-    btrfs-progs conmon crun netavark \
-    uidmap libsubid-dev
+        golang-github-containers-common \
+        git golang-go make gcc pkg-config \
+        libgpgme-dev libassuan-dev libseccomp-dev \
+        libdevmapper-dev libglib2.0-dev libsystemd-dev \
+        libselinux1-dev libapparmor-dev libbtrfs-dev \
+        btrfs-progs conmon crun netavark aardvark-dns \
+        passt nftables uidmap libsubid-dev
+
+GO_VERSION=$(go version | grep -oP 'go1\.\d+' | head -1)
+if [[ "$(printf '%s\n%s\n' "go1.25" "$GO_VERSION" | sort -V | head -n1)" != "go1.25" ]]; then
+    echo "ERROR: Podman v6 requires Go 1.25 or higher. You have $GO_VERSION."
+    echo "Please update your Go installation (e.g., via the official Go tarball or a PPA) before continuing."
+    exit 1
+fi
 
 WORKDIR="$(mktemp -d /tmp/podman-build.XXXXXX)"
 echo ""
@@ -400,7 +414,7 @@ echo "     containers are running. If not, you can restart them"
 echo "     manually with 'podman start <name>' or 'podman start --all'."
 echo "     If your containers are managed by Quadlet (systemd units),"
 echo "     restart them with:"
-echo "       systemctl --user start \$(ls ~/.config/containers/systemd/*.container | xargs -n1 basename | sed 's/\.container\$//')"
+echo "       systemctl --user start \$(find ~/.config/containers/systemd -name '*.container' | xargs -n1 basename | sed 's/\.container\$//')"
 echo "     If you run rootful containers (sudo podman), you must restart"
 echo "     them manually. For root Quadlet containers, use:"
 echo "       sudo systemctl restart \$(ls /etc/containers/systemd/*.container | xargs -n1 basename | sed 's/\.container\$//')"
