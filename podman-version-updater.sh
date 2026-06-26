@@ -259,6 +259,17 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "==> Setting up containers configuration for rootless operation..."
     sudo mkdir -p /etc/containers /usr/share/containers /usr/share/containers/seccomp
 
+    # Back up existing configs before overwriting
+    CONFIG_BACKUP_DIR=""
+    if [[ -f /etc/containers/containers.conf ]] || [[ -f /etc/containers/storage.conf ]]; then
+        CONFIG_BACKUP_DIR="$(mktemp -d /tmp/containers-config-backup.XXXXXX)"
+        echo "==> Backing up existing /etc/containers config to $CONFIG_BACKUP_DIR ..."
+        sudo cp -a /etc/containers/. "$CONFIG_BACKUP_DIR/" 2>/dev/null || true
+        echo "==> NOTE: If you have a non-standard graphroot or custom config,"
+        echo "    your originals are preserved in $CONFIG_BACKUP_DIR"
+        echo "    Review and restore manually if needed after the upgrade."
+    fi
+
     # Try to clone the official common repo at v0.68.0; fallback to minimal config
     if git clone --depth 1 --branch v0.68.0 https://github.com/containers/common.git /tmp/common-0.68.0 2>/dev/null; then
         sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /etc/containers/containers.conf
@@ -374,4 +385,10 @@ echo "     if networks fail in 6.x.x, verify versions with:"
 echo "       /usr/lib/podman/netavark --version"
 echo "       /usr/lib/podman/aardvark-dns --version"
 echo "     Both should report 2.0.0 for Podman v6."
+    if [[ -n "${CONFIG_BACKUP_DIR:-}" ]]; then
+        echo "  ** Your original /etc/containers config was backed up to:"
+        echo "     $CONFIG_BACKUP_DIR"
+        echo "     If your images appear missing or graphroot changed, restore with:"
+        echo "       sudo cp -a ${CONFIG_BACKUP_DIR}/. /etc/containers/"
+    fi
 echo "=============================================="
