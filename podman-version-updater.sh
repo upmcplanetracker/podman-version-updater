@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 # Variable to track binary backup for recovery
 BACKUP_DIR=""
+CONFIG_BACKUP_DIR=""
 
 cleanup_on_failure() {
     echo ""
@@ -385,10 +386,10 @@ echo "     if networks fail in 6.x.x, verify versions with:"
 echo "       /usr/lib/podman/netavark --version"
 echo "       /usr/lib/podman/aardvark-dns --version"
 echo "     Both should report 2.0.0 for Podman v6."
-    if [[ -n "${CONFIG_BACKUP_DIR:-}" ]]; then
-        echo "  ** Your original /etc/containers config was backed up to:"
-        echo "     $CONFIG_BACKUP_DIR"
-        echo "     If your images appear missing or graphroot changed, restore with:"
-        echo "       sudo cp -a ${CONFIG_BACKUP_DIR}/. /etc/containers/"
-    fi
+if [[ -n "${CONFIG_BACKUP_DIR:-}" ]]; then
+    echo "  ** Your original /etc/containers config was backed up to:"
+    echo "     $CONFIG_BACKUP_DIR"
+    echo "     If your images appear missing or graphroot changed, restore with:"
+    echo "       sudo cp -a ${CONFIG_BACKUP_DIR}/. /etc/containers/"
+fi
 echo "=============================================="
