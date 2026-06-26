@@ -43,7 +43,7 @@ Usage:
   Fresh install (no existing Podman): $0 --fresh-install <RELEASE_TAG_URL>
 
   The <RELEASE_TAG_URL> must be a GitHub release tag URL, e.g.:
-      https://github.com/containers/podman/releases/tag/v5.8.3
+      https://github.com/podman-container-tools/podman/releases/tag/v5.8.3
 EOF
     exit 1
 }
@@ -117,7 +117,7 @@ fi
 
 if [[ ! "$RELEASE_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/tag/(.+)$ ]]; then
     echo "ERROR: URL must be a GitHub release tag URL, e.g.:"
-    echo "       https://github.com/containers/podman/releases/tag/v5.8.3"
+    echo "       https://github.com/podman-container-tools/podman/releases/tag/v5.8.3"
     exit 1
 fi
 
