@@ -87,6 +87,7 @@ This script does **not** touch your running containers. It will:
 *   Install build tools (`cargo`, `protoc`, `git`).
 *   Clone, build, and install **Netavark 2.0.0** → `/usr/local/bin/netavark`
 *   Clone, build, and install **Aardvark‑dns 2.0.0** → `/usr/local/bin/aardvark-dns`
+*   Copy **Netavark 2.0.0** and **Aardvark‑dns 2.0.0** to `/usr/lib/podman/` — Podman hardcodes this path and ignores `$PATH` when looking for network binaries.
 *   Create rootless container configuration files in `/etc/containers` (storage.conf, containers.conf).
 
 It is safe to run multiple times.
@@ -132,15 +133,16 @@ For a **fresh install of Podman 6.0.0**, first run the preparation script:
 
 This stops any Podman services, removes the compiled Podman files from `/usr/local`, and restores the system binary from `/usr/bin/podman`. It is safe even if no local version is installed.
 
-**However, the rollback does NOT remove the custom Netavark / Aardvark‑dns binaries installed by the preparation script.** Those remain in `/usr/local/bin`. If you want to completely revert to the stock Ubuntu‑shipped network stack, run these additional commands after the rollback:
+**However, the rollback does NOT remove the custom Netavark / Aardvark‑dns binaries installed by the preparation script.** Those remain in `/usr/local/bin` and `/usr/lib/podman/`. If you want to completely revert to the stock Ubuntu‑shipped network stack, run these additional commands after the rollback:
 
     # Remove the custom binaries
     sudo rm -f /usr/local/bin/netavark /usr/local/bin/aardvark-dns
     
-    # Reinstall the original APT packages to restore the default binaries
+    # Reinstall the original APT packages — this restores the 1.16.x versions
+    # to /usr/lib/podman/ (where Podman actually looks) and /usr/bin/
     sudo apt install --reinstall netavark aardvark-dns
 
-After this, `netavark --version` and `aardvark-dns --version` will show the original 1.16.x versions, and Podman will use the default paths.
+After this, `netavark --version` and `aardvark-dns --version` will show the original 1.16.x versions, and Podman will use the restored binaries in `/usr/lib/podman/`.
 
 * * *
 
