@@ -107,14 +107,14 @@ echo ""
 echo "=============================================="
 echo " Dependencies are ready for Podman v6.0.0!"
 echo " You can now run your Podman upgrade script:"
-echo "   ./podman-version-updater.sh https://github.com/containers/podman/releases/tag/v6.0.0"
-echo "   Or ./podman-version-updater.sh --fresh-install https://github.com/containers/podman/releases/tag/v6.0.0"
+echo "   ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v6.0.0"
+echo "   Or ./podman-version-updater.sh --fresh-install https://github.com/podman-container-tools/podman/releases/tag/v6.0.0"
 echo "=============================================="
 
 # ---------- Optional automatic upgrade ----------
 if [[ $# -ge 1 ]]; then
     UPDATE_SCRIPT="$1"
-    PODMAN_TAG="${2:-https://github.com/containers/podman/releases/tag/v6.0.0}"
+    PODMAN_TAG="${2:-https://github.com/podman-container-tools/podman/releases/tag/v6.0.0}"
     if [[ -x "$UPDATE_SCRIPT" ]]; then
         echo ""
         echo "==> Automatically running: $UPDATE_SCRIPT $PODMAN_TAG"
