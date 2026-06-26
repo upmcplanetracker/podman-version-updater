@@ -16,19 +16,20 @@ echo "==> Installing build dependencies (cargo, protoc, git)..."
 sudo apt update -qq
 sudo apt install -y -qq git make cargo rustc protobuf-compiler
 
+BUILD_DIR=""
+trap '[[ -n "$BUILD_DIR" ]] && rm -rf "$BUILD_DIR"' EXIT
+
 # ---------- Netavark 2.0.0 ----------
 if command -v netavark &>/dev/null && [[ "$(netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "2.0.0" ]]; then
     echo "==> Netavark 2.0.0 already present, skipping."
 else
     echo "==> Building Netavark 2.0.0..."
     BUILD_DIR=$(mktemp -d)
-    trap 'rm -rf "$BUILD_DIR"' EXIT
     cd "$BUILD_DIR"
     git clone --branch v2.0.0 --depth 1 https://github.com/containers/netavark.git
     cd netavark
     make build
     sudo cp bin/netavark /usr/local/bin/netavark
-    rm -rf "$BUILD_DIR"
     echo "Netavark 2.0.0 installed to /usr/local/bin/netavark"
 fi
 
@@ -38,15 +39,28 @@ if command -v aardvark-dns &>/dev/null && [[ "$(aardvark-dns --version 2>/dev/nu
 else
     echo "==> Building Aardvark-dns 2.0.0..."
     BUILD_DIR=$(mktemp -d)
-    trap 'rm -rf "$BUILD_DIR"' EXIT
     cd "$BUILD_DIR"
     git clone --branch v2.0.0 --depth 1 https://github.com/containers/aardvark-dns.git
     cd aardvark-dns
     make build
     sudo cp bin/aardvark-dns /usr/local/bin/aardvark-dns
-    rm -rf "$BUILD_DIR"
     echo "Aardvark-dns 2.0.0 installed to /usr/local/bin/aardvark-dns"
 fi
+
+echo "==> Installing netavark and aardvark-dns to /usr/lib/podman/..."
+sudo mkdir -p /usr/lib/podman
+sudo cp /usr/local/bin/netavark /usr/lib/podman/netavark
+
+if [[ "$(/usr/lib/podman/aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" != "2.0.0" ]]; then
+    pkill -f aardvark-dns 2>/dev/null || true
+    sudo cp /usr/local/bin/aardvark-dns /usr/lib/podman/aardvark-dns
+else
+    echo "==> /usr/lib/podman/aardvark-dns already 2.0.0, skipping."
+fi
+
+echo "==> Verifying:"
+/usr/lib/podman/netavark --version
+/usr/lib/podman/aardvark-dns --version
 
 # ---------- Config files ----------
 echo "==> Setting up containers configuration for rootless Podman v6..."
