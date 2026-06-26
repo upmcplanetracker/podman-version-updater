@@ -169,6 +169,22 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "==> All runtime dependencies are satisfied."
 fi
 
+# ---------- Copy netavark and aardvark-dns to /usr/lib/podman/ (podman ignores PATH) ----------
+if [[ "$MAJOR_TARGET" -ge 6 ]]; then
+    echo "==> Installing netavark and aardvark-dns to /usr/lib/podman/..."
+    sudo mkdir -p /usr/lib/podman
+    sudo cp /usr/local/bin/netavark /usr/lib/podman/netavark
+    if [[ "$(/usr/lib/podman/aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" != "2.0.0" ]]; then
+        pkill -f aardvark-dns 2>/dev/null || true
+        sudo cp /usr/local/bin/aardvark-dns /usr/lib/podman/aardvark-dns
+    else
+        echo "==> /usr/lib/podman/aardvark-dns already 2.0.0, skipping."
+    fi
+    echo "==> Verifying:"
+    /usr/lib/podman/netavark --version
+    /usr/lib/podman/aardvark-dns --version
+fi
+
 # ---------- Upgrade / fresh install logic ----------
 if [[ "$FRESH_INSTALL" == true ]]; then
     echo "==> Performing a fresh installation (no existing Podman required)."
