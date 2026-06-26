@@ -30,6 +30,7 @@ This toolchain was written and validated **exclusively** on:
 *   **Ubuntu 26.04 (Resolute)**
 *   **Podman 5.7.0** (apt‑managed) → **5.8.3** (source‑built)
 *   **Podman 5.8.3** (source‑built) → **6.0.0** (source‑built, after running the dependency preparation script)
+*   **no podman installed** → **6.0.0** (source‑built, after running the dependency preparation script)
 
 If you are using a different OS, a different base version, or a different target version, verify that **all** build and runtime dependencies are compatible.
 
@@ -45,6 +46,7 @@ The updater script installs build dependencies via `apt`, but it does **not** ve
 *   **For Podman ≤ 5.8.3** – Run the main updater script directly. It clones, builds, installs, migrates the database, and restarts your containers.
 *   **For Podman ≥ 6.0.0** – You must first run the `prepare-for-podman6.sh` script to install **Netavark 2.0.0**, **Aardvark‑dns 2.0.0**, and the required rootless container configuration files. Then run the main updater with the v6.0.0 tag.
 *   The scripts back up your running containers, stop services gracefully, verify the new binary, and restore everything automatically.
+*   For v6 upgrades, existing `/etc/containers` config files are automatically backed up to `/tmp/containers-config-backup.*` before being overwritten. If you have a non-standard graphroot or custom storage paths, review and restore from that backup after the upgrade.
 *   **If anything fails, the updater removes any partially installed files and leaves your original Podman untouched.**
 *   The rollback function only removes files placed by the updater script. The dependency binaries installed by the preparation script are **not** removed by `--rollback`. You must revert them manually if desired (see the Rollback section).
 
@@ -97,6 +99,18 @@ It is safe to run multiple times.
     ./podman-version-updater.sh https://github.com/containers/podman/releases/tag/v6.0.0
 
 This will stop your containers, build Podman v6.0.0 from source, install it, migrate the database, and restart your containers. The script will verify that the new binary works correctly before finishing.
+
+#### ⚠️ Custom graphroot or non-standard storage paths
+
+If you have configured a non-default `graphroot` in `/etc/containers/storage.conf` 
+(e.g., pointing to a larger disk), the updater script will overwrite that file with 
+the upstream default. Your original config is backed up to `/tmp/containers-config-backup.*`.
+
+If your images appear to be missing after the upgrade, restore your original config:
+
+    sudo cp -a /tmp/containers-config-backup.XXXXXX/. /etc/containers/
+
+Replace `XXXXXX` with the actual suffix shown in the upgrade output, then restart Podman.
 
 #### ⚠️ What if I must delay the Podman upgrade after running the prepare script?
 
@@ -207,6 +221,7 @@ The scripts create temporary files that can be safely deleted after a successful
 *   `~/podman-state-backup.txt` – container state snapshot.
 *   `/tmp/podman-build.*` – build directories (cleared automatically on reboot).
 *   `/tmp/common-0.68.0` – temporary clone of config files (if cloned).
+*   `/tmp/containers-config-backup.*` – backup of your original `/etc/containers config` (*v6 upgrades only*). Review before deleting if you have custom storage paths.
 
 * * *
 
