@@ -54,20 +54,25 @@ The updater script installs build dependencies via `apt`, but it does **not** ve
 🚀 Usage
 --------
 
+### 0\. Make sure Podman is already installed
+
+**Prerequisite:** Podman must already be installed on your system before running this script.
+If not, install the Ubuntu repo version via `sudo apt update && sudo apt install podman`.
+
 ### 1\. Get the scripts
 
-    Clone the repository:
-    ```
+Clone the repository:
+    
     git clone https://github.com/upmcplanetracker/podman-version-updater.git
     cd podman-version-updater
     chmod +x podman-version-updater.sh prepare-for-podman6.sh
-    ```
-    Or download just the two required files:
-    ```
+    
+Or download just the two required files:
+
     wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/podman-version-updater.sh
     wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/prepare-for-podman6.sh
     chmod +x podman-version-updater.sh prepare-for-podman6.sh
-    ```
+
 * * *
 
 ### 🔹 Upgrading to Podman 5.8.3 (or any version < 6.0.0)
