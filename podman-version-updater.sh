@@ -349,6 +349,18 @@ hash -r
 
 rm -rf "$WORKDIR"
 
+# ---------- AppArmor Fix for /usr/local/bin ----------
+echo "==> Patching AppArmor profile to allow rootless Podman execution from /usr/local/bin..."
+if [[ -f /etc/apparmor.d/podman ]]; then
+    # This sed command is safe to run multiple times; it will only match if the unpatched string exists.
+    sudo sed -Ei 's!^profile podman /usr/bin/podman!profile podman /usr/{bin,local/bin}/podman!' /etc/apparmor.d/podman
+    sudo apparmor_parser -r /etc/apparmor.d/podman 2>/dev/null || true
+    echo "==> AppArmor profile updated and reloaded."
+else
+    echo "==> No default AppArmor profile found for Podman. Skipping patch."
+fi
+# -----------------------------------------------------
+
 echo ""
 echo "=============================================="
 echo "  Podman successfully updated to $TAG_VERSION!"
