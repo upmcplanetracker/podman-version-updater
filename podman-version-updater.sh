@@ -155,8 +155,8 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
         fi
     }
 
-    check_binary_version netavark "2.0.0" "netavark"
-    check_binary_version aardvark-dns "2.0.0" "aardvark-dns"
+    check_binary_version /usr/lib/podman/netavark "2.0.0" "netavark"
+    check_binary_version /usr/lib/podman/aardvark-dns "2.0.0" "aardvark-dns"
 
     if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
         echo "ERROR: Missing required runtime dependencies for Podman v6:"
@@ -166,22 +166,6 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
         exit 1
     fi
     echo "==> All runtime dependencies are satisfied."
-fi
-
-# ---------- Copy netavark and aardvark-dns to /usr/lib/podman/ (podman ignores PATH) ----------
-if [[ "$MAJOR_TARGET" -ge 6 ]]; then
-    echo "==> Installing netavark and aardvark-dns to /usr/lib/podman/..."
-    sudo mkdir -p /usr/lib/podman
-    sudo cp /usr/local/bin/netavark /usr/lib/podman/netavark
-    if [[ "$(/usr/lib/podman/aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" != "2.0.0" ]]; then
-        pkill -f aardvark-dns 2>/dev/null || true
-        sudo cp /usr/local/bin/aardvark-dns /usr/lib/podman/aardvark-dns
-    else
-        echo "==> /usr/lib/podman/aardvark-dns already 2.0.0, skipping."
-    fi
-    echo "==> Verifying:"
-    /usr/lib/podman/netavark --version
-    /usr/lib/podman/aardvark-dns --version
 fi
 
 # ---------- Upgrade logic ----------
@@ -252,58 +236,6 @@ sudo systemctl disable --now podman.service podman.socket \
 sudo systemctl daemon-reload
 echo "==> System-level Podman services disabled. User-level Quadlet services unaffected."
 BACKUP_DIR="" # Success, clear backup
-
-# ---------- Install containers-common configuration (needed for v6 rootless) ----------
-if [[ "$MAJOR_TARGET" -ge 6 ]]; then
-    echo "==> Setting up containers configuration for rootless operation..."
-    sudo mkdir -p /etc/containers /usr/share/containers /usr/share/containers/seccomp
-
-    # Back up existing configs before overwriting
-    CONFIG_BACKUP_DIR=""
-    if [[ -f /etc/containers/containers.conf ]] || [[ -f /etc/containers/storage.conf ]]; then
-        CONFIG_BACKUP_DIR="$(mktemp -d /tmp/containers-config-backup.XXXXXX)"
-        echo "==> Backing up existing /etc/containers config to $CONFIG_BACKUP_DIR ..."
-        sudo cp -a /etc/containers/. "$CONFIG_BACKUP_DIR/" 2>/dev/null || true
-        echo "==> NOTE: If you have a non-standard graphroot or custom config,"
-        echo "    your originals are preserved in $CONFIG_BACKUP_DIR"
-        echo "    Review and restore manually if needed after the upgrade."
-    fi
-
-    # Try to clone the official common repo at v0.68.0; fallback to minimal config
-    if git clone --depth 1 --branch v0.68.0 https://github.com/containers/common.git /tmp/common-0.68.0 2>/dev/null; then
-        sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /etc/containers/containers.conf
-        sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /usr/share/containers/containers.conf
-        sudo cp /tmp/common-0.68.0/pkg/config/registries.conf /etc/containers/registries.conf
-        sudo cp /tmp/common-0.68.0/pkg/config/storage.conf /etc/containers/storage.conf
-        sudo cp /tmp/common-0.68.0/pkg/seccomp/*.json /usr/share/containers/seccomp/ 2>/dev/null || true
-        rm -rf /tmp/common-0.68.0
-        echo "==> Installed containers-common configs from v0.68.0."
-    else
-        echo "==> v0.68.0 tag not found; creating minimal rootless config."
-        cat <<'CFG' | sudo tee /etc/containers/containers.conf > /dev/null
-[engine]
-events_logger = "journald"
-runtime = "crun"
-[network]
-network_backend = "netavark"
-CFG
-        USER_ID=$(id -u)
-        cat <<STOCFG | sudo tee /etc/containers/storage.conf > /dev/null
-[storage]
-driver = "overlay"
-runroot = "/run/user/${USER_ID}/containers"
-graphroot = "/home/$USER/.local/share/containers/storage"
-STOCFG
-        sudo cp /etc/containers/containers.conf /usr/share/containers/containers.conf
-        sudo cp /etc/containers/storage.conf /usr/share/containers/storage.conf
-        echo "==> Minimal rootless config created."
-    fi
-
-    # Set proper ownership for rootless access
-    sudo chown -R root:root /etc/containers
-    sudo chmod 755 /etc/containers
-    sudo chmod 644 /etc/containers/*.conf 2>/dev/null || true
-fi
 
 # ---------- Use absolute path to verify the new binary ----------
 INSTALLED_PODMAN="/usr/local/bin/podman"
