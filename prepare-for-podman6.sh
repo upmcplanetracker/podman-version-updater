@@ -77,6 +77,16 @@ echo "==> Verifying:"
 /usr/lib/podman/netavark --version
 /usr/lib/podman/aardvark-dns --version
 
+# ---------- Backup existing config for safety ----------
+if [[ -f /etc/containers/storage.conf ]]; then
+    BACKUP_NAME="/tmp/podman-config-backup-$(date +%Y%m%d-%H%M%S)"
+    echo "==> Backing up existing configs to $BACKUP_NAME"
+    sudo mkdir -p "$BACKUP_NAME"
+    sudo cp /etc/containers/storage.conf "$BACKUP_NAME/" 2>/dev/null || true
+    sudo cp /etc/containers/containers.conf "$BACKUP_NAME/" 2>/dev/null || true
+    echo "    (If you use a custom graphroot, look here after upgrade!)"
+fi
+
 # ---------- Config files ----------
 echo "==> Setting up containers configuration for rootless Podman v6..."
 sudo mkdir -p /etc/containers /usr/share/containers /usr/share/containers/seccomp
@@ -121,6 +131,9 @@ ls -l /etc/containers/containers.conf /etc/containers/storage.conf
 echo ""
 echo "=============================================="
 echo " Dependencies are ready for Podman v6.0.0!"
+echo " IMPORTANT: If you had a custom storage graphroot, a backup"
+echo " of your config is in /tmp/podman-config-backup-$(date +%Y%m%d). "
+echo " Restore them after updating to 6.0.0."
 echo " You can now run your Podman upgrade script:"
 echo "   ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v6.0.0"
 echo "=============================================="
