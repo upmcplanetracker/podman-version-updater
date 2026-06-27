@@ -106,17 +106,15 @@ It is safe to run multiple times.
 
 This will stop your containers, build Podman v6.0.0 from source, install it, migrate the database, and restart your containers. The script will verify that the new binary works correctly before finishing.
 
-#### ⚠️ Custom graphroot or non-standard storage paths
+### 💾 Handling Custom Graphroots
 
-If you have configured a non-default `graphroot` in `/etc/containers/storage.conf` 
-(e.g., pointing to a larger disk), the updater script will overwrite that file with 
-the upstream default. Your original config is backed up to `/tmp/containers-config-backup.*`.
+If you have a custom storage graphroot defined in `/etc/containers/storage.conf`, the `prepare-for-podman6.sh` script will automatically create a backup at `/tmp/podman-config-backup-<TIMESTAMP>`.
 
-If your images appear to be missing after the upgrade, restore your original config:
+1.  Run the upgrade script.
+2.  After the upgrade is finished, verify your current graphroot: `podman info | grep graphRoot`.
+3.  If it has reverted to the default, stop all containers, copy your original `storage.conf` from the backup directory back to `/etc/containers/storage.conf`, and restart the Podman services.
 
-    sudo cp -a /tmp/containers-config-backup.XXXXXX/. /etc/containers/
-
-Replace `XXXXXX` with the actual suffix shown in the upgrade output, then restart Podman.
+This keeps your updater script (`podman-version-updater.sh`) clean and lightweight while ensuring that users with advanced, non-standard storage setups don't lose their data during the v6 transition.
 
 #### ⚠️ What if I must delay the Podman upgrade after running the prepare script?
 
