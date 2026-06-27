@@ -45,7 +45,6 @@ The updater script installs build dependencies via `apt`, but it does **not** ve
 *   **For Podman ≤ 5.8.3** – Run the main updater script directly. It clones, builds, installs, migrates the database, and restarts your containers.
 *   **For Podman ≥ 6.0.0** – You must first run the `prepare-for-podman6.sh` script to install **Netavark 2.0.0**, **Aardvark‑dns 2.0.0**, and the required rootless container configuration files. Then run the main updater with the v6.0.0 tag.
 *   The scripts back up your running containers, stop services gracefully, verify the new binary, and restore everything automatically.
-*   For v6 upgrades, existing `/etc/containers` config files are automatically backed up to `/tmp/containers-config-backup.*` before being overwritten. If you have a non-standard graphroot or custom storage paths, review and restore from that backup after the upgrade.
 *   **If anything fails, the updater removes any partially installed files and leaves your original Podman untouched.**
 *   The rollback function only removes files placed by the updater script. The dependency binaries installed by the preparation script are **not** removed by `--rollback`. You must revert them manually if desired (see the Rollback section).
 
@@ -77,7 +76,7 @@ Or download just the two required files:
 
 ### 🔹 Upgrading to Podman 5.8.3 (or any version < 6.0.0)
 
-    ./podman-version-updater.sh https://github.com//podman-container-tools/podman/releases/tag/v5.8.3
+    ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v5.8.3
 
 No additional preparation is needed. The script will build, install, and verify Podman in one step.
 
@@ -103,7 +102,7 @@ It is safe to run multiple times.
 
 #### Step B – Upgrade Podman
 
-    ./podman-version-updater.sh https://github.com/containers/podman/releases/tag/v6.0.0
+    ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v6.0.0
 
 This will stop your containers, build Podman v6.0.0 from source, install it, migrate the database, and restart your containers. The script will verify that the new binary works correctly before finishing.
 
