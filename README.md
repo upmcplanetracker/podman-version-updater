@@ -30,7 +30,6 @@ This toolchain was written and validated **exclusively** on:
 *   **Ubuntu 26.04 (Resolute)**
 *   **Podman 5.7.0** (apt‑managed) → **5.8.3** (source‑built)
 *   **Podman 5.8.3** (source‑built) → **6.0.0** (source‑built, after running the dependency preparation script)
-*   **no podman installed** → **6.0.0** (source‑built, after running the dependency preparation script)
 
 If you are using a different OS, a different base version, or a different target version, verify that **all** build and runtime dependencies are compatible.
 
@@ -57,15 +56,18 @@ The updater script installs build dependencies via `apt`, but it does **not** ve
 
 ### 1\. Get the scripts
 
-    # Clone the repository
+    Clone the repository:
+    ```
     git clone https://github.com/upmcplanetracker/podman-version-updater.git
     cd podman-version-updater
-    
-    # Or download just the two required files
+    chmod +x podman-version-updater.sh prepare-for-podman6.sh
+    ```
+    Or download just the two required files:
+    ```
     wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/podman-version-updater.sh
     wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/prepare-for-podman6.sh
     chmod +x podman-version-updater.sh prepare-for-podman6.sh
-
+    ```
 * * *
 
 ### 🔹 Upgrading to Podman 5.8.3 (or any version < 6.0.0)
@@ -125,19 +127,6 @@ Later, when you are ready to upgrade, move them back:
     sudo mv /usr/local/bin/aardvark-dns-2.0.0 /usr/local/bin/aardvark-dns
 
 This ensures the old Podman keeps using the original system binaries until you are ready.
-
-* * *
-
-### 🌱 Fresh install (no Podman installed yet)
-
-For a fresh installation of a version **below 6.0.0**:
-
-    ./podman-version-updater.sh --fresh-install https://github.com/containers/podman/releases/tag/v5.8.3
-
-For a **fresh install of Podman 6.0.0**, first run the preparation script:
-
-    ./prepare-for-podman6.sh
-    ./podman-version-updater.sh --fresh-install https://github.com/containers/podman/releases/tag/v6.0.0
 
 * * *
 
