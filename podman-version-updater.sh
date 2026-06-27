@@ -120,6 +120,21 @@ echo "==> Tag        : $TAG (version $TAG_VERSION)"
 
 if [[ $EUID -eq 0 ]]; then echo "ERROR: Run this script as your normal user, not root."; exit 1; fi
 
+# ---------- OS Compatibility Guardrail ----------
+if [[ ! -f /etc/os-release ]]; then
+    echo "ERROR: /etc/os-release not found. Cannot determine operating system."
+    exit 1
+fi
+
+. /etc/os-release
+if [[ "$ID" != "ubuntu" ]] || ! [[ "$VERSION_ID" == "26.04" || "$VERSION_ID" == "25.10" ]]; then
+    echo "ERROR: This script is intended for Ubuntu 25.10 and 26.04."
+    echo "Detected: ${PRETTY_NAME:-Unknown OS}"
+    exit 1
+fi
+echo "==> OS Check Passed: $PRETTY_NAME"
+# ----------------------------------------------
+
 # ---------- Check runtime dependencies for Podman v6+ (binary versions) ----------
 if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "==> Checking required runtime dependencies for Podman v6..."
