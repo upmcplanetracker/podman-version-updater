@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 # Variable to track binary backup for recovery
 BACKUP_DIR=""
-CONFIG_BACKUP_DIR=""
 
 cleanup_on_failure() {
     echo ""
