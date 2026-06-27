@@ -41,7 +41,7 @@ usage() {
 Usage:
   Update:   $0 <RELEASE_TAG_URL>
   Rollback: $0 --rollback
-  Fresh install (no existing Podman): $0 --fresh-install <RELEASE_TAG_URL>
+  NOTE: Podman must already be installed (sudo apt install podman) before running this script.
 
   The <RELEASE_TAG_URL> must be a GitHub release tag URL, e.g.:
       https://github.com/podman-container-tools/podman/releases/tag/v5.8.3
@@ -73,16 +73,9 @@ if [[ "$1" == "--rollback" ]]; then
     if [[ "$USER_SERVICE_ACTIVE" == true ]]; then systemctl --user stop podman.service 2>/dev/null || true; fi
     if [[ "$USER_SOCKET_ACTIVE" == true ]]; then systemctl --user stop podman.socket 2>/dev/null || true; fi
 
-    ROOTFUL_SERVICE_ACTIVE=false
-    ROOTFUL_SOCKET_ACTIVE=false
-    if systemctl is-active --quiet podman.service 2>/dev/null; then ROOTFUL_SERVICE_ACTIVE=true; fi
-    if systemctl is-active --quiet podman.socket 2>/dev/null; then ROOTFUL_SOCKET_ACTIVE=true; fi
-
-    if [[ "$ROOTFUL_SERVICE_ACTIVE" == true || "$ROOTFUL_SOCKET_ACTIVE" == true ]]; then
-        echo "Rootful Podman services detected; stopping them too..."
-        if [[ "$ROOTFUL_SERVICE_ACTIVE" == true ]]; then sudo systemctl stop podman.service 2>/dev/null || true; fi
-        if [[ "$ROOTFUL_SOCKET_ACTIVE" == true ]]; then sudo systemctl stop podman.socket 2>/dev/null || true; fi
-    fi
+    echo "==> Disabling system-level Podman services..."
+    sudo systemctl disable --now podman.service podman.socket podman-auto-update.service podman-auto-update.timer podman-clean-transient.service podman-restart.service 2>/dev/null || true
+    sudo systemctl daemon-reload
 
     echo "==> Removing locally installed Podman from /usr/local..."
     sudo rm -f /usr/local/bin/podman /usr/local/bin/podman-remote 2>/dev/null || true
@@ -94,8 +87,6 @@ if [[ "$1" == "--rollback" ]]; then
 
     if [[ "$USER_SOCKET_ACTIVE" == true ]]; then systemctl --user start podman.socket 2>/dev/null || true; fi
     if [[ "$USER_SERVICE_ACTIVE" == true ]]; then systemctl --user start podman.service 2>/dev/null || true; fi
-    if [[ "$ROOTFUL_SOCKET_ACTIVE" == true ]]; then sudo systemctl start podman.socket 2>/dev/null || true; fi
-    if [[ "$ROOTFUL_SERVICE_ACTIVE" == true ]]; then sudo systemctl start podman.service 2>/dev/null || true; fi
 
     echo ""
     echo "=============================================="
@@ -105,16 +96,8 @@ if [[ "$1" == "--rollback" ]]; then
     exit 0
 fi
 
-# ---------- FRESH INSTALL / UPGRADE ----------
-if [[ "$1" == "--fresh-install" ]]; then
-    if [[ $# -ne 2 ]]; then echo "Usage: $0 --fresh-install <RELEASE_TAG_URL>"; exit 1; fi
-    RELEASE_URL="$2"
-    FRESH_INSTALL=true
-else
-    if [[ $# -ne 1 ]]; then usage; fi
-    RELEASE_URL="$1"
-    FRESH_INSTALL=false
-fi
+if [[ $# -ne 1 ]]; then usage; fi
+RELEASE_URL="$1"
 
 if [[ ! "$RELEASE_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/tag/(.+)$ ]]; then
     echo "ERROR: URL must be a GitHub release tag URL, e.g.:"
@@ -186,23 +169,22 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     /usr/lib/podman/aardvark-dns --version
 fi
 
-# ---------- Upgrade / fresh install logic ----------
-if [[ "$FRESH_INSTALL" == true ]]; then
-    echo "==> Performing a fresh installation (no existing Podman required)."
+# ---------- Upgrade logic ----------
+if ! command -v podman &>/dev/null; then
+    echo "ERROR: 'podman' not found. Install it first with 'sudo apt install podman'."
+    exit 1
+fi
+CURRENT_VERSION="$(podman --version | grep -oP '\d+\.\d+\.\d+')"
+echo "==> Current Podman version: $CURRENT_VERSION"
+if [[ "$CURRENT_VERSION" == "$TAG_VERSION" ]]; then echo "==> Already at $TAG_VERSION. Nothing to do."; exit 0; fi
+if [[ "$(printf '%s\n%s\n' "$TAG_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" == "$TAG_VERSION" ]]; then echo "ERROR: Refusing to downgrade."; exit 1; fi
+echo "==> Will upgrade from $CURRENT_VERSION to $TAG_VERSION."
+echo "==> Saving current state..."
+if ! podman ps --filter status=running --format "{{.Names}}" > ~/podman-state-backup.txt 2>/dev/null; then
+    echo "WARNING: Could not save container state. Skipping restart."
+    rm -f ~/podman-state-backup.txt; STATE_CAPTURED=false
 else
-    if ! command -v podman &>/dev/null; then echo "ERROR: 'podman' not found. Use --fresh-install if you have none."; exit 1; fi
-    CURRENT_VERSION="$(podman --version | grep -oP '\d+\.\d+\.\d+')"
-    echo "==> Current Podman version: $CURRENT_VERSION"
-    if [[ "$CURRENT_VERSION" == "$TAG_VERSION" ]]; then echo "==> Current version is already $TAG_VERSION. Nothing to do."; exit 0; fi
-    if [[ "$(printf '%s\n%s\n' "$TAG_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" == "$TAG_VERSION" ]]; then echo "ERROR: Refusing to downgrade."; exit 1; fi
-    echo "==> Will upgrade from $CURRENT_VERSION to $TAG_VERSION."
-    echo "==> Saving current state..."
-    if ! podman ps --filter status=running --format "{{.Names}}" > ~/podman-state-backup.txt 2>/dev/null; then
-        echo "WARNING: Could not save container state. Skipping restart."
-        rm -f ~/podman-state-backup.txt; STATE_CAPTURED=false
-    else
-        STATE_CAPTURED=true
-    fi
+    STATE_CAPTURED=true
 fi
 
 echo ""
@@ -219,7 +201,6 @@ fi
 # from source via prepare-for-podman6.sh before running this script.
 sudo apt update
 sudo apt install -y golang-github-containers-common git golang-go make gcc pkg-config libgpgme-dev libassuan-dev libseccomp-dev libdevmapper-dev libglib2.0-dev libsystemd-dev libselinux1-dev libapparmor-dev libbtrfs-dev btrfs-progs conmon crun passt nftables uidmap libsubid-dev
-ROOTFUL_WAS_ACTIVE=false
 # Go version check
 GO_VERSION=$(go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || true)
 if [[ -z "$GO_VERSION" ]] || [[ "$(printf '%s\n%s\n' "$MIN_GO_VERSION" "$GO_VERSION" | sort -V | head -n1)" != "$MIN_GO_VERSION" ]]; then
@@ -236,23 +217,25 @@ git -c advice.detachedHead=false checkout "$TAG"
 echo "==> Building Podman from source using all available cores..."
 make BUILDTAGS="selinux seccomp systemd exclude_graphdriver_devicemapper" -j"$(nproc)"
 
-if [[ "$FRESH_INSTALL" == false ]]; then
-    echo "==> Backing up current binaries..."
-    BACKUP_DIR="$(mktemp -d /tmp/podman-bin-backup.XXXXXX)"
-    mkdir -p "$BACKUP_DIR"/{bin,libexec,share}
-    [[ -f /usr/local/bin/podman ]] && cp -a /usr/local/bin/podman* "$BACKUP_DIR/bin/" 2>/dev/null || true
-    [[ -d /usr/local/libexec/podman ]] && cp -a /usr/local/libexec/podman "$BACKUP_DIR/libexec/" 2>/dev/null || true
-    [[ -d /usr/local/share/man/man1 ]] && cp -a /usr/local/share/man/man1/podman* "$BACKUP_DIR/share/" 2>/dev/null || true
+echo "==> Backing up current binaries..."
+BACKUP_DIR="$(mktemp -d /tmp/podman-bin-backup.XXXXXX)"
+mkdir -p "$BACKUP_DIR"/{bin,libexec,share}
+[[ -f /usr/local/bin/podman ]] && cp -a /usr/local/bin/podman* "$BACKUP_DIR/bin/" 2>/dev/null || true
+[[ -d /usr/local/libexec/podman ]] && cp -a /usr/local/libexec/podman "$BACKUP_DIR/libexec/" 2>/dev/null || true
+[[ -d /usr/local/share/man/man1 ]] && cp -a /usr/local/share/man/man1/podman* "$BACKUP_DIR/share/" 2>/dev/null || true
     
-    echo "==> Stopping all containers and Podman services safely..."
-    podman stop --all 2>/dev/null || true
-    systemctl --user stop podman.socket podman.service 2>/dev/null || true
-    ROOTFUL_WAS_ACTIVE=$(systemctl is-active --quiet podman.service && echo true || echo false)
-    if [[ "$ROOTFUL_WAS_ACTIVE" == true ]]; then sudo systemctl stop podman.socket podman.service 2>/dev/null || true; fi
-fi
+echo "==> Stopping all containers and Podman services safely..."
+podman stop --all 2>/dev/null || true
+systemctl --user stop podman.socket podman.service 2>/dev/null || true
 
 echo "==> Installing to /usr/local..."
 sudo make install PREFIX=/usr/local
+echo "==> Disabling system-level Podman services (rootless Quadlet setup only)..."
+sudo systemctl disable --now podman.service podman.socket \
+    podman-auto-update.service podman-auto-update.timer \
+    podman-clean-transient.service podman-restart.service 2>/dev/null || true
+sudo systemctl daemon-reload
+echo "==> System-level Podman services disabled. User-level Quadlet services unaffected."
 BACKUP_DIR="" # Success, clear backup
 
 # ---------- Install containers-common configuration (needed for v6 rootless) ----------
@@ -332,29 +315,19 @@ else
     "$INSTALLED_PODMAN" system migrate
 fi
 
-if [[ "${ROOTFUL_WAS_ACTIVE:-false}" == true ]]; then
-    sudo "$INSTALLED_PODMAN" system migrate
-fi
-
 systemctl --user daemon-reload
 
 # Restart services that were previously active
-if [[ "$FRESH_INSTALL" == false ]]; then
-    if systemctl --user is-enabled podman.socket &>/dev/null; then
-        systemctl --user restart podman.socket 2>/dev/null || true
-    fi
+if systemctl --user is-enabled podman.socket &>/dev/null; then
+    systemctl --user restart podman.socket 2>/dev/null || true
+fi
     
-    if [[ "${STATE_CAPTURED:-false}" == true && -s ~/podman-state-backup.txt ]]; then
-        echo "==> Restarting previously running containers..."
-        while read -r container; do
-            [[ -n "$container" ]] && "$INSTALLED_PODMAN" start "$container" 2>/dev/null || true
-        done < ~/podman-state-backup.txt
-        rm -f ~/podman-state-backup.txt
-    fi
-    
-    if [[ "${ROOTFUL_WAS_ACTIVE:-false}" == true ]]; then
-        sudo systemctl start podman.socket podman.service 2>/dev/null || true
-    fi
+if [[ "${STATE_CAPTURED:-false}" == true && -s ~/podman-state-backup.txt ]]; then
+    echo "==> Restarting previously running containers..."
+    while read -r container; do
+        [[ -n "$container" ]] && "$INSTALLED_PODMAN" start "$container" 2>/dev/null || true
+    done < ~/podman-state-backup.txt
+    rm -f ~/podman-state-backup.txt
 fi
 
 hash -r
