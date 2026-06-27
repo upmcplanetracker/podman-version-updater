@@ -212,7 +212,7 @@ The scripts create temporary files that can be safely deleted after a successful
 *   `~/podman-state-backup.txt` – container state snapshot.
 *   `/tmp/podman-build.*` – build directories (cleared automatically on reboot).
 *   `/tmp/common-0.68.0` – temporary clone of config files (if cloned).
-*   `/tmp/containers-config-backup.*` – backup of your original `/etc/containers config` (*v6 upgrades only*). Review before deleting if you have custom storage paths.
+*   `/tmp/podman-config-backup-<TIMESTAMP>` – backup of your original `/etc/containers` config (*v6 upgrades only*). Review before deleting if you have custom storage paths.
 
 * * *
 
