@@ -35,7 +35,7 @@ If you are using a different OS, a different base version, or a different target
 
 ### 🧩 Dependency version check is YOUR job
 
-The updater script installs build dependencies via `apt`, but it does **not** verify whether those packages meet the minimum versions required by the Podman release you are building. Always read the [official build instructions](https://github.com/containers/podman/blob/main/install.md) for your target tag and ensure your system’s libraries are new enough.
+The updater script installs build dependencies via `apt`, but it does **not** verify whether those packages meet the minimum versions required by the Podman release you are building. Always read the [official build instructions](https://github.com/podman-container-tools/podman/blob/main/install.md) for your target tag and ensure your system’s libraries are new enough.
 
 * * *
 
@@ -77,7 +77,7 @@ Or download just the two required files:
 
 ### 🔹 Upgrading to Podman 5.8.3 (or any version < 6.0.0)
 
-    ./podman-version-updater.sh https://github.com/containers/podman/releases/tag/v5.8.3
+    ./podman-version-updater.sh https://github.com//podman-container-tools/podman/releases/tag/v5.8.3
 
 No additional preparation is needed. The script will build, install, and verify Podman in one step.
 
