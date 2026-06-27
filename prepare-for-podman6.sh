@@ -78,6 +78,7 @@ echo "==> Verifying:"
 /usr/lib/podman/aardvark-dns --version
 
 # ---------- Backup existing config for safety ----------
+BACKUP_NAME=""
 if [[ -f /etc/containers/storage.conf ]]; then
     BACKUP_NAME="/tmp/podman-config-backup-$(date +%Y%m%d-%H%M%S)"
     echo "==> Backing up existing configs to $BACKUP_NAME"
@@ -132,7 +133,7 @@ echo ""
 echo "=============================================="
 echo " Dependencies are ready for Podman v6.0.0!"
 echo " IMPORTANT: If you had a custom storage graphroot, a backup"
-echo " of your config is in /tmp/podman-config-backup-$(date +%Y%m%d). "
+echo " of your config is in ${BACKUP_NAME:-/tmp/podman-config-backup-*}."
 echo " Restore them after updating to 6.0.0."
 echo " You can now run your Podman upgrade script:"
 echo "   ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v6.0.0"
