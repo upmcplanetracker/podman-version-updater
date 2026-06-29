@@ -72,9 +72,18 @@ if [[ "$1" == "--rollback" ]]; then
     if [[ "$USER_SERVICE_ACTIVE" == true ]]; then systemctl --user stop podman.service 2>/dev/null || true; fi
     if [[ "$USER_SOCKET_ACTIVE" == true ]]; then systemctl --user stop podman.socket 2>/dev/null || true; fi
 
-    echo "==> Disabling system-level Podman services..."
-    sudo systemctl disable --now podman.service podman.socket podman-auto-update.service podman-auto-update.timer podman-clean-transient.service podman-restart.service 2>/dev/null || true
+    echo "==> Disabling and masking system-level Podman services (rootless Quadlet setup only)..."
+    sudo systemctl disable --now \
+        podman.service podman.socket \
+        podman-auto-update.service podman-auto-update.timer \
+        podman-clean-transient.service podman-restart.service 2>/dev/null || true
+    sudo systemctl mask \
+        podman.service podman.socket \
+        podman-auto-update.service podman-auto-update.timer \
+        podman-clean-transient.service podman-restart.service 2>/dev/null || true
     sudo systemctl daemon-reload
+    echo "==> System-level Podman services masked. User-level Quadlet services unaffected."
+    echo "    (masking prevents systemd preset processing from re-enabling them on future upgrades)"
 
     echo "==> Removing locally installed Podman from /usr/local..."
     sudo rm -f /usr/local/bin/podman /usr/local/bin/podman-remote 2>/dev/null || true
