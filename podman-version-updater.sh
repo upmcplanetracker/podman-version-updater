@@ -237,12 +237,18 @@ systemctl --user stop podman.socket podman.service 2>/dev/null || true
 
 echo "==> Installing to /usr/local..."
 sudo make install PREFIX=/usr/local
-echo "==> Disabling system-level Podman services (rootless Quadlet setup only)..."
-sudo systemctl disable --now podman.service podman.socket \
+echo "==> Disabling and masking system-level Podman services (rootless Quadlet setup only)..."
+sudo systemctl disable --now \
+    podman.service podman.socket \
+    podman-auto-update.service podman-auto-update.timer \
+    podman-clean-transient.service podman-restart.service 2>/dev/null || true
+sudo systemctl mask \
+    podman.service podman.socket \
     podman-auto-update.service podman-auto-update.timer \
     podman-clean-transient.service podman-restart.service 2>/dev/null || true
 sudo systemctl daemon-reload
-echo "==> System-level Podman services disabled. User-level Quadlet services unaffected."
+echo "==> System-level Podman services masked. User-level Quadlet services unaffected."
+echo "    (masking prevents systemd preset processing from re-enabling them on future upgrades)"
 BACKUP_DIR="" # Success, clear backup
 
 # ---------- Use absolute path to verify the new binary ----------
