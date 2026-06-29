@@ -5,14 +5,14 @@
 
 * * *
 
-⚠️ IMPORTANT WARNINGS: READ THIS FIRST ⚠️
------------------------------------------
+IMPORTANT WARNINGS: READ THIS FIRST
+-------------------------------------
 
-### 🛑 This process replaces a system‑level binary
+### This process replaces a system‑level binary
 
 Replacing a core container runtime by compiling from source is a high‑risk operation. The script installs a self‑compiled Podman into `/usr/local`, which overrides the system package. This is not a standard `apt` upgrade and carries potential for breakage, data loss, or unexpected system behaviour.
 
-### 📦 Complete backup is mandatory
+### Complete backup is mandatory
 
 Before running any of these scripts, you **must** back up:
 
@@ -23,7 +23,7 @@ Before running any of these scripts, you **must** back up:
 
 The author takes **zero responsibility** for data loss, broken containers, or unbootable systems. You assume **all risk**.
 
-### 🧪 Tested only on Ubuntu 26.04
+### Tested only on Ubuntu 26.04
 
 This toolchain was written and validated **exclusively** on:
 
@@ -33,13 +33,13 @@ This toolchain was written and validated **exclusively** on:
 
 If you are using a different OS, a different base version, or a different target version, verify that **all** build and runtime dependencies are compatible.
 
-### 🧩 Dependency version check is YOUR job
+### Dependency version check is YOUR job
 
 The updater script installs build dependencies via `apt`, but it does **not** verify whether those packages meet the minimum versions required by the Podman release you are building. Always read the [official build instructions](https://github.com/podman-container-tools/podman/blob/main/install.md) for your target tag and ensure your system’s libraries are new enough.
 
 * * *
 
-📋 How It Works
+How It Works
 ---------------
 
 *   **For Podman ≤ 5.8.3** – Run the main updater script directly. It clones, builds, installs, migrates the database, and restarts your containers.
@@ -50,7 +50,7 @@ The updater script installs build dependencies via `apt`, but it does **not** ve
 
 * * *
 
-🚀 Usage
+Usage
 --------
 
 ### 0\. Make sure Podman is already installed
@@ -74,7 +74,7 @@ Or download just the two required files:
 
 * * *
 
-### 🔹 Upgrading to Podman 5.8.3 (or any version < 6.0.0)
+### Upgrading to Podman 5.8.3 (or any version < 6.0.0)
 
     ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v5.8.3
 
@@ -82,7 +82,7 @@ No additional preparation is needed. The script will build, install, and verify 
 
 * * *
 
-### 🔸 Upgrading to Podman 6.0.0 (or any version ≥ 6.0.0)
+### Upgrading to Podman 6.0.0 (or any version ≥ 6.0.0)
 
 **Important:** These steps **must be performed in the same maintenance window**, back‑to‑back. Running the preparation script and then delaying the Podman upgrade may cause the old Podman to pick up the new network stack, leading to unexpected behaviour.
 
@@ -106,7 +106,7 @@ It is safe to run multiple times.
 
 This will stop your containers, build Podman v6.0.0 from source, install it, migrate the database, and restart your containers. The script will verify that the new binary works correctly before finishing.
 
-### 💾 Handling Custom Graphroots
+### Handling Custom Graphroots
 
 If you have a custom storage graphroot defined in `/etc/containers/storage.conf`, the `prepare-for-podman6.sh` script will automatically create a backup at `/tmp/podman-config-backup-<TIMESTAMP>`.
 
@@ -116,7 +116,7 @@ If you have a custom storage graphroot defined in `/etc/containers/storage.conf`
 
 This keeps your updater script (`podman-version-updater.sh`) clean and lightweight while ensuring that users with advanced, non-standard storage setups don't lose their data during the v6 transition.
 
-#### ⚠️ What if I must delay the Podman upgrade after running the prepare script?
+#### What if I must delay the Podman upgrade after running the prepare script?
 
 If you cannot upgrade Podman immediately, **rename the new binaries** so Podman 5.8.3 does not see them:
 
@@ -132,7 +132,67 @@ This ensures the old Podman keeps using the original system binaries until you a
 
 * * *
 
-### 🔙 Rollback to the original apt‑managed Podman
+### System-Level Podman Services and Rootless Container Ownership
+
+When Podman is installed or upgraded from source via `make install`, it deploys
+several systemd system-level unit files:
+
+- `podman.service` / `podman.socket`
+- `podman-auto-update.service` / `podman-auto-update.timer`
+- `podman-clean-transient.service`
+- `podman-restart.service`
+
+These units run as **root** and are designed for system-wide (rootful) Podman
+deployments. If you run rootless Podman with Quadlet, they are not only
+unnecessary — they are dangerous. Specifically, `podman-clean-transient.service`
+can reset ownership of container storage paths to `root:root` on boot, causing
+all rootless Quadlet services to fail to start.
+
+### Why `disable` alone isn't enough
+
+`systemctl disable` removes the symlinks that cause a unit to start
+automatically, but systemd **preset processing** (triggered by package installs
+or `daemon-reload` in some configurations) can re-enable units whose preset
+state is `enabled`. You can verify this with:
+
+```bash
+systemctl list-unit-files | grep podman
+# Look for units showing: disabled    enabled
+# The second column is the preset — "enabled" means it CAN be re-enabled.
+```
+
+`systemctl mask` replaces the unit file with a symlink to `/dev/null`, making
+it impossible for any mechanism to start the unit until you explicitly unmask it.
+
+### What this script does
+
+`podman-version-updater.sh` automatically **masks** all system-level Podman
+units after every install. If you ever hit container ownership errors after a
+reboot, verify their state:
+
+```bash
+systemctl list-unit-files | grep podman
+# All entries should show: masked    enabled
+```
+
+If any show `disabled` instead of `masked`, re-run the mask manually:
+
+```bash
+sudo systemctl mask \
+    podman.service podman.socket \
+    podman-auto-update.service podman-auto-update.timer \
+    podman-clean-transient.service podman-restart.service
+```
+
+### If you need rootful system-level Podman
+
+If you intentionally run system-level Podman containers alongside rootless ones,
+unmask only the specific units you need and ensure they do not touch your
+rootless user's storage paths.
+
+* * *
+
+### Rollback to the original apt‑managed Podman
 
     ./podman-version-updater.sh --rollback
 
@@ -151,7 +211,7 @@ After this, `netavark --version` and `aardvark-dns --version` will show the orig
 
 * * *
 
-### 🔄 After a successful upgrade: clear your shell’s command hash
+### After a successful upgrade: clear your shell’s command hash
 
     hash -r          # in the same terminal
     # or simply open a new terminal window
@@ -164,7 +224,7 @@ Then verify:
 
 * * *
 
-### 🧪 Verify your containers and networks
+### Verify your containers and networks
 
 The script restarts all containers that were previously running, but you should always confirm:
 
@@ -182,7 +242,7 @@ For Quadlet users, check that the systemd units are active:
 
 * * *
 
-🔄 Managing Installed Podman Versions
+Managing Installed Podman Versions
 -------------------------------------
 
 After the updater runs, you may have two Podman versions:
@@ -204,7 +264,7 @@ After this, rollback will **not** work because there is no fallback binary.
 
 * * *
 
-🧹 Cleanup
+Cleanup
 ----------
 
 The scripts create temporary files that can be safely deleted after a successful upgrade:
