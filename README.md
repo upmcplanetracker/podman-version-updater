@@ -209,6 +209,8 @@ This stops any Podman services, removes the compiled Podman files from `/usr/loc
 
 After this, `netavark --version` and `aardvark-dns --version` will show the original 1.16.x versions, and Podman will use the restored binaries in `/usr/lib/podman/`.
 
+You will need to run `hash -r` from the terminal after the rollback is complete in order for the original version of Podman to be found.
+
 * * *
 
 ### After a successful upgrade: clear your shell’s command hash
