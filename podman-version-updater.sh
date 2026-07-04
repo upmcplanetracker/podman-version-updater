@@ -100,6 +100,8 @@ if [[ "$1" == "--rollback" ]]; then
     echo "=============================================="
     echo "Rollback complete. System Podman version is now:"
     podman --version
+    echo "If this is not reporting the expected version you"
+    echo "may need to 'hash -r' again from the terminal"
     echo "=============================================="
     exit 0
 fi
