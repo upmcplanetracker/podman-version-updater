@@ -27,9 +27,7 @@ The author takes **zero responsibility** for data loss, broken containers, or un
 
 This toolchain was written and validated **exclusively** on:
 
-*   **Ubuntu 26.04 (Resolute)**
-*   **Podman 5.7.0** (apt‑managed) → **5.8.3** (source‑built)
-*   **Podman 5.8.3** (source‑built) → **6.0.0** (source‑built, after running the dependency preparation script)
+*   **Ubuntu 26.04 (Resolute)** running **Podman 5.7.0** (apt‑managed)
 
 If you are using a different OS, a different base version, or a different target version, verify that **all** build and runtime dependencies are compatible.
 
@@ -43,7 +41,7 @@ How It Works
 ---------------
 
 *   **For Podman ≤ 5.8.4** – Run the main updater script directly. It clones, builds, installs, migrates the database, and restarts your containers.
-*   **For Podman ≥ 6.0.0** – You must first run the `prepare-for-podman6.sh` script to install **Netavark 2.0.0**, **Aardvark‑dns 2.0.0**, and the required rootless container configuration files. Then run the main updater with the v6.0.0 tag.
+*   **For Podman ≥ 6.x** – You must first run the `prepare-for-podman6.sh` script to install **Netavark 2.0.0**, **Aardvark‑dns 2.0.0**, and the required rootless container configuration files. Then run the main updater with the v6.x tag. This only needs to be done the first time you upgrade from 5.x to 6.x.
 *   The scripts back up your running containers, stop services gracefully, verify the new binary, and restore everything automatically.
 *   **If anything fails, the updater removes any partially installed files and leaves your original Podman untouched.**
 *   The rollback function only removes files placed by the updater script. The dependency binaries installed by the preparation script are **not** removed by `--rollback`. You must revert them manually if desired (see the Rollback section).
@@ -82,7 +80,7 @@ No additional preparation is needed. The script will build, install, and verify 
 
 * * *
 
-### Upgrading to Podman 6.0.0 (or any version ≥ 6.0.0)
+### Upgrading to Podman 6.x
 
 **Important:** These steps **must be performed in the same maintenance window**, back-to-back. Running the preparation script and then delaying the Podman upgrade may cause the old Podman to pick up the new network stack, leading to unexpected behaviour.
 
@@ -118,7 +116,7 @@ This keeps your updater script (`podman-version-updater.sh`) clean and lightweig
 
 #### What if I must delay the Podman upgrade after running the prepare script?
 
-If you cannot upgrade Podman immediately, **rename the new binaries** so Podman 5.8.3 does not see them:
+If you cannot upgrade Podman immediately, **rename the new binaries** so Podman 5.8.4 does not see them:
 
     sudo mv /usr/local/bin/netavark /usr/local/bin/netavark-2.0.0
     sudo mv /usr/local/bin/aardvark-dns /usr/local/bin/aardvark-dns-2.0.0
