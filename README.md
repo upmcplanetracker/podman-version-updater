@@ -42,7 +42,7 @@ The updater script installs build dependencies via `apt`, but it does **not** ve
 How It Works
 ---------------
 
-*   **For Podman ≤ 5.8.3** – Run the main updater script directly. It clones, builds, installs, migrates the database, and restarts your containers.
+*   **For Podman ≤ 5.8.4** – Run the main updater script directly. It clones, builds, installs, migrates the database, and restarts your containers.
 *   **For Podman ≥ 6.0.0** – You must first run the `prepare-for-podman6.sh` script to install **Netavark 2.0.0**, **Aardvark‑dns 2.0.0**, and the required rootless container configuration files. Then run the main updater with the v6.0.0 tag.
 *   The scripts back up your running containers, stop services gracefully, verify the new binary, and restore everything automatically.
 *   **If anything fails, the updater removes any partially installed files and leaves your original Podman untouched.**
@@ -74,9 +74,9 @@ Or download just the two required files:
 
 * * *
 
-### Upgrading to Podman 5.8.3 (or any version < 6.0.0)
+### Upgrading to Podman 5.8.4 (or any version < 6.0.0)
 
-    ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v5.8.3
+    ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v5.8.4
 
 No additional preparation is needed. The script will build, install, and verify Podman in one step.
 
@@ -84,7 +84,7 @@ No additional preparation is needed. The script will build, install, and verify 
 
 ### Upgrading to Podman 6.0.0 (or any version ≥ 6.0.0)
 
-**Important:** These steps **must be performed in the same maintenance window**, back‑to‑back. Running the preparation script and then delaying the Podman upgrade may cause the old Podman to pick up the new network stack, leading to unexpected behaviour.
+**Important:** These steps **must be performed in the same maintenance window**, back-to-back. Running the preparation script and then delaying the Podman upgrade may cause the old Podman to pick up the new network stack, leading to unexpected behaviour.
 
 #### Step A – Prepare dependencies
 
@@ -198,7 +198,7 @@ rootless user's storage paths.
 
 This stops any Podman services, removes the compiled Podman files from `/usr/local`, and restores the system binary from `/usr/bin/podman`. It is safe even if no local version is installed.
 
-**However, the rollback does NOT remove the custom Netavark / Aardvark‑dns binaries installed by the preparation script.** Those remain in `/usr/local/bin` and `/usr/lib/podman/`. If you want to completely revert to the stock Ubuntu‑shipped network stack, run these additional commands after the rollback:
+**However, the rollback does NOT remove the custom Netavark / Aardvark‑dns binaries installed by the preparation script.** Those remain in `/usr/local/bin` and `/usr/lib/podman/`. If you want to completely revert to the stock Ubuntu shipped network stack, run these additional commands after the rollback:
 
     # Remove the custom binaries
     sudo rm -f /usr/local/bin/netavark /usr/local/bin/aardvark-dns
@@ -249,7 +249,7 @@ Managing Installed Podman Versions
 
 After the updater runs, you may have two Podman versions:
 
-*   **Source‑built** (e.g., 5.8.3 or 6.0.0) at `/usr/local/bin/podman`
+*   **Source‑built** (e.g., 5.8.4 or 6.0.0) at `/usr/local/bin/podman`
 *   **APT‑managed** (e.g., 5.7.0) at `/usr/bin/podman`
 
 The new version is used because `/usr/local/bin` comes first in `$PATH`.
