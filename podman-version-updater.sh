@@ -145,6 +145,127 @@ fi
 echo "==> OS Check Passed: $PRETTY_NAME"
 # ----------------------------------------------
 
+# ---------- Podman v6+ preparation (Netavark, Aardvark, configs) ----------
+prepare_for_podman_v6() {
+    echo "=============================================="
+    echo "  Running preparation for Podman v6+"
+    echo "  (Netavark 2.0.0, Aardvark-dns 2.0.0, config)"
+    echo "=============================================="
+
+    # Ensure build tools for netavark/aardvark
+    echo "==> Installing build dependencies for Netavark/Aardvark..."
+    sudo apt update -qq
+    sudo apt install -y -qq git make cargo rustc protobuf-compiler
+
+    # ---------- Netavark 2.0.0 ----------
+    if command -v netavark &>/dev/null && [[ "$(netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "2.0.0" ]]; then
+        echo "==> Netavark 2.0.0 already present, skipping."
+    else
+        echo "==> Building Netavark 2.0.0..."
+        local neta_dir
+        neta_dir=$(mktemp -d)
+        cd "$neta_dir"
+        git clone --branch v2.0.0 --depth 1 https://github.com/containers/netavark.git
+        cd netavark
+        make build
+        sudo cp bin/netavark /usr/local/bin/netavark
+        echo "Netavark 2.0.0 installed to /usr/local/bin/netavark"
+        cd /
+        rm -rf "$neta_dir"
+    fi
+
+    # ---------- Aardvark-dns 2.0.0 ----------
+    if command -v aardvark-dns &>/dev/null && [[ "$(aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "2.0.0" ]]; then
+        echo "==> Aardvark-dns 2.0.0 already present, skipping."
+    else
+        echo "==> Building Aardvark-dns 2.0.0..."
+        local aard_dir
+        aard_dir=$(mktemp -d)
+        cd "$aard_dir"
+        git clone --branch v2.0.0 --depth 1 https://github.com/containers/aardvark-dns.git
+        cd aardvark-dns
+        make build
+        sudo cp bin/aardvark-dns /usr/local/bin/aardvark-dns
+        echo "Aardvark-dns 2.0.0 installed to /usr/local/bin/aardvark-dns"
+        cd /
+        rm -rf "$aard_dir"
+    fi
+
+    echo "==> Installing netavark and aardvark-dns to /usr/lib/podman/..."
+    sudo mkdir -p /usr/lib/podman
+    sudo cp /usr/local/bin/netavark /usr/lib/podman/netavark
+
+    if [[ "$(/usr/lib/podman/aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" != "2.0.0" ]]; then
+        pkill -f aardvark-dns 2>/dev/null || true
+        sudo cp /usr/local/bin/aardvark-dns /usr/lib/podman/aardvark-dns
+    else
+        echo "==> /usr/lib/podman/aardvark-dns already 2.0.0, skipping."
+    fi
+
+    echo "==> Verifying:"
+    /usr/lib/podman/netavark --version
+    /usr/lib/podman/aardvark-dns --version
+
+    # ---------- Backup existing config for safety ----------
+    BACKUP_NAME=""
+    if [[ -f /etc/containers/storage.conf ]]; then
+        BACKUP_NAME="/tmp/podman-config-backup-$(date +%Y%m%d-%H%M%S)"
+        echo "==> Backing up existing configs to $BACKUP_NAME"
+        sudo mkdir -p "$BACKUP_NAME"
+        sudo cp /etc/containers/storage.conf "$BACKUP_NAME/" 2>/dev/null || true
+        sudo cp /etc/containers/containers.conf "$BACKUP_NAME/" 2>/dev/null || true
+        echo "    (If you use a custom graphroot, look here after upgrade!)"
+    fi
+
+    # ---------- Config files ----------
+    echo "==> Setting up containers configuration for rootless Podman v6..."
+    sudo mkdir -p /etc/containers /usr/share/containers /usr/share/containers/seccomp
+
+    if git clone --depth 1 --branch v0.68.0 https://github.com/containers/common.git /tmp/common-0.68.0 2>/dev/null; then
+        sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /etc/containers/containers.conf
+        sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /usr/share/containers/containers.conf
+        sudo cp /tmp/common-0.68.0/pkg/config/registries.conf /etc/containers/registries.conf
+        sudo cp /tmp/common-0.68.0/pkg/config/storage.conf /etc/containers/storage.conf
+        sudo cp /tmp/common-0.68.0/pkg/seccomp/*.json /usr/share/containers/seccomp/ 2>/dev/null || true
+        rm -rf /tmp/common-0.68.0
+        echo "Installed official containers-common v0.68.0 configs."
+    else
+        echo "Tag v0.68.0 not found; creating minimal rootless config."
+        cat <<'CFG' | sudo tee /etc/containers/containers.conf > /dev/null
+[engine]
+events_logger = "journald"
+runtime = "crun"
+[network]
+network_backend = "netavark"
+CFG
+        USER_ID=$(id -u)
+        cat <<STOCFG | sudo tee /etc/containers/storage.conf > /dev/null
+[storage]
+driver = "overlay"
+runroot = "/run/user/${USER_ID}/containers"
+graphroot = "/home/${USER}/.local/share/containers/storage"
+STOCFG
+        sudo cp /etc/containers/containers.conf /usr/share/containers/containers.conf
+        echo "Minimal rootless config created."
+    fi
+
+    echo ""
+    echo "New versions:"
+    netavark --version
+    aardvark-dns --version
+    echo "Config files in /etc/containers:"
+    ls -l /etc/containers/containers.conf /etc/containers/storage.conf
+
+    echo ""
+    echo "=============================================="
+    echo " Preparation for Podman v6 complete."
+    echo "=============================================="
+}
+
+if [[ "$MAJOR_TARGET" -ge 6 ]]; then
+    prepare_for_podman_v6
+fi
+
 # ---------- Check runtime dependencies for Podman v6+ (binary versions) ----------
 if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "==> Checking required runtime dependencies for Podman v6..."
@@ -172,7 +293,7 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
         echo "ERROR: Missing required runtime dependencies for Podman v6:"
         for dep in "${MISSING_DEPS[@]}"; do echo "  - $dep"; done
         echo ""
-        echo "Run the prepare-for-podman6.sh script first, then retry."
+        echo "The preparation step should have installed them – something went wrong."
         exit 1
     fi
     echo "==> All runtime dependencies are satisfied."
@@ -206,8 +327,8 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
     echo "  NOTE: Podman v6 requires Netavark/Aardvark v2.0.0+ and containers-common v0.68.0+."
 fi
 # netavark and aardvark-dns are intentionally excluded here —
-# for Podman v6, versions 2.0.0+ are required and must be built
-# from source via prepare-for-podman6.sh before running this script.
+# for Podman v6, versions 2.0.0+ are required and were installed
+# by the preparation step above.
 sudo apt update
 sudo apt install -y golang-github-containers-common git golang-go make gcc pkg-config libgpgme-dev libassuan-dev libseccomp-dev libdevmapper-dev libglib2.0-dev libsystemd-dev libselinux1-dev libapparmor-dev libbtrfs-dev btrfs-progs conmon crun passt nftables uidmap libsubid-dev
 # Go version check
