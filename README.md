@@ -66,8 +66,8 @@ Clone the repository:
     
 Or download just the two required files:
 
-    wget -O https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/podman-version-updater.sh
-    wget -O https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/prepare-for-podman6.sh
+    wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/podman-version-updater.sh
+    wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/prepare-for-podman6.sh
     chmod +x podman-version-updater.sh prepare-for-podman6.sh
 
 * * *
