@@ -43,7 +43,7 @@ Usage:
   NOTE: Podman must already be installed (sudo apt install podman) before running this script.
 
   The <RELEASE_TAG_URL> must be a GitHub release tag URL, e.g.:
-      https://github.com/podman-container-tools/podman/releases/tag/v5.8.3
+      https://github.com/podman-container-tools/podman/releases/tag/v5.8.5
 EOF
     exit 1
 }
@@ -111,7 +111,7 @@ RELEASE_URL="$1"
 
 if [[ ! "$RELEASE_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/tag/(.+)$ ]]; then
     echo "ERROR: URL must be a GitHub release tag URL, e.g.:"
-    echo "       https://github.com/podman-container-tools/podman/releases/tag/v5.8.3"
+    echo "       https://github.com/podman-container-tools/podman/releases/tag/v5.8.5"
     exit 1
 fi
 
