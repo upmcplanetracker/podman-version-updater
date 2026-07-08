@@ -75,9 +75,9 @@ Run the script with the desired release tag URL. Examples:
 
     ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v5.8.5
 
-#### Upgrade to Podman 6.x (e.g., v6.0.0)
+#### Upgrade to Podman 6.x (e.g., v6.0.1)
 
-    ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v6.0.0
+    ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v6.0.1
 
 **No separate preparation step is required.** The script automatically:
 
@@ -94,7 +94,7 @@ The entire process is handled in one run, ensuring the network stack and Podman 
 
 ### Handling Custom Graphroots
 
-If you have a custom storage graphroot defined in `/etc/containers/storage.conf`, the script automatically creates a backup at `/tmp/podman-config-backup-<TIMESTAMP>` before updating the configuration for v6.
+If you have a custom storage graphroot defined in `/etc/containers/storage.conf`, the script automatically creates a backup at `/tmp/podman-config-backup-<TIMESTAMP>` before updating the configuration for v6.x
 
 1.  Run the upgrade script with the v6 tag.
 2.  After the upgrade, verify your current graphroot: `podman info | grep graphRoot`.
@@ -209,7 +209,7 @@ Managing Installed Podman Versions
 
 After the updater runs, you may have two Podman versions:
 
-*   **Source‑built** (e.g., 5.8.5 or 6.0.0) at `/usr/local/bin/podman`
+*   **Source‑built** (e.g., 5.8.5 or 6.0.1) at `/usr/local/bin/podman`
 *   **APT‑managed** (e.g., 5.7.0) at `/usr/bin/podman`
 
 The new version is used because `/usr/local/bin` comes first in `$PATH`.
