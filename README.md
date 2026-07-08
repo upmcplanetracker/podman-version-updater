@@ -71,9 +71,9 @@ Or download just the required file:
 
 Run the script with the desired release tag URL. Examples:
 
-#### Upgrade to Podman 5.8.4
+#### Upgrade to Podman 5.8.5
 
-    ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v5.8.4
+    ./podman-version-updater.sh https://github.com/podman-container-tools/podman/releases/tag/v5.8.5
 
 #### Upgrade to Podman 6.x (e.g., v6.0.0)
 
@@ -209,7 +209,7 @@ Managing Installed Podman Versions
 
 After the updater runs, you may have two Podman versions:
 
-*   **Source‑built** (e.g., 5.8.4 or 6.0.0) at `/usr/local/bin/podman`
+*   **Source‑built** (e.g., 5.8.5 or 6.0.0) at `/usr/local/bin/podman`
 *   **APT‑managed** (e.g., 5.7.0) at `/usr/bin/podman`
 
 The new version is used because `/usr/local/bin` comes first in `$PATH`.
