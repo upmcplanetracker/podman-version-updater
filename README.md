@@ -40,10 +40,10 @@ How It Works
 ------------
 
 *   **For any Podman version** – run the single updater script with the desired GitHub release tag. The script clones the source, builds, installs, migrates the database, and restarts your containers.
-*   **For Podman ≥ 6.x** – the script automatically builds and installs **Netavark**, **Aardvark‑dns**, **conmon**, and **crun**, plus the required rootless container configuration files, **before** building Podman. No separate preparation step is needed. Target versions for each dependency are set at the top of the script and can be edited there. They are pre-set for the newest versions available as of this writing.
+*   **For Podman ≥ 6.x** – the script automatically builds and installs **Netavark**, **Aardvark‑dns**, **conmon**, **fuse-overlayfs**, and **crun**, plus the required rootless container configuration files, **before** building Podman. No separate preparation step is needed. Target versions for each dependency are set at the top of the script and can be edited there. They are pre-set for the newest versions available as of this writing.
 *   The script backs up your running containers, stops services gracefully, verifies the new binary, and restores everything automatically.
 *   **If anything fails, the updater removes any partially installed files and leaves your original Podman untouched.**
-*   The rollback function (`--rollback`) removes only the Podman binary and libraries placed by the updater. The dependency binaries (Netavark / Aardvark / conmon) installed for v6 are **not** removed automatically—see the Rollback section for manual cleanup.
+*   The rollback function (`--rollback`) removes only the Podman binary and libraries placed by the updater. The dependency binaries (Netavark / Aardvark / conmon / fuse-overlayfs) installed for v6 are **not** removed automatically—see the Rollback section for manual cleanup.
 
 * * *
 
@@ -85,13 +85,14 @@ Run the script with the desired release tag URL. Examples:
 *   Clones, builds, and installs **Netavark** → `/usr/local/bin/netavark`
 *   Clones, builds, and installs **Aardvark‑dns** → `/usr/local/bin/aardvark-dns`
 *   Clones, builds, and installs **conmon** → `/usr/local/bin/conmon`
+*   Clones, builds, and installs **fuse-overlayfs** → `/usr/local/bin/fuse-overlayfs`. This is a fallback storage driver only — it stays completely inactive if native rootless overlay is in use (the default on modern kernels), and is only invoked if Podman needs it.
 *   Downloads and installs **crun** → `/usr/local/bin/crun`
 *   Copies **Netavark** and **Aardvark‑dns** to `/usr/lib/podman/` — Podman hardcodes this path and ignores `$PATH` when looking for network binaries.
 
 *   Creates rootless container configuration files in `/etc/containers` (storage.conf, containers.conf).
 *   Then proceeds to build and install Podman itself.
 
-Exact target versions (Netavark, Aardvark‑dns, crun, conmon, containers-common) are defined as variables at the top of `podman-version-updater.sh` — edit them there when new upstream releases come out. The script skips rebuilding any dependency that's already at the target version.
+Exact target versions (Netavark, Aardvark‑dns, crun, conmon, fuse-overlayfs, containers-common) are defined as variables at the top of `podman-version-updater.sh` — edit them there when new upstream releases come out. The script skips rebuilding any dependency that's already at the target version.
 
 The entire process is handled in one run, ensuring the network stack and Podman are always synchronised.
 
@@ -164,11 +165,11 @@ This stops any Podman services, removes the compiled Podman files from `/usr/loc
 **However, the rollback does NOT remove the custom Netavark / Aardvark‑dns binaries that may have been installed.** Those remain in `/usr/local/bin` and `/usr/lib/podman/`. If you want to completely revert to the stock Ubuntu‑shipped network stack, run these additional commands after the rollback:
 
     # Remove the custom binaries
-    sudo rm -f /usr/local/bin/netavark /usr/local/bin/aardvark-dns /usr/local/bin/crun /usr/local/bin/conmon
+    sudo rm -f /usr/local/bin/netavark /usr/local/bin/aardvark-dns /usr/local/bin/crun /usr/local/bin/conmon /usr/local/bin/fuse-overlayfs
     
     # Reinstall the original APT packages — this restores the 1.16.x (netavark/aardvark)
-    # and stock (crun/conmon) versions to /usr/lib/podman/ (where Podman actually looks) and /usr/bin/
-    sudo apt install --reinstall netavark aardvark-dns crun conmon
+    # and stock (crun/conmon/fuse-overlayfs) versions to /usr/lib/podman/ (where Podman actually looks) and /usr/bin/
+    sudo apt install --reinstall netavark aardvark-dns crun conmon fuse-overlayfs
 
 After this, `netavark --version` and `aardvark-dns --version` will show the original 1.16.x versions, and Podman will use the restored binaries in `/usr/lib/podman/`.
 
