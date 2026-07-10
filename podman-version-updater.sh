@@ -263,7 +263,7 @@ prepare_for_podman_v6() {
     # ---------- fuse-overlayfs ----------
     # Fallback storage driver only — inactive unless native rootless overlay
     # is unavailable. Source: https://github.com/containers/fuse-overlayfs/releases/tag/v1.17
-    if command -v fuse-overlayfs &>/dev/null && [[ "$(fuse-overlayfs --version 2>&1 | head -1 | grep -oP '(?<=version )\d+\.\d+')" == "${FUSE_OVERLAYFS_VERSION}" ]]; then
+    if command -v fuse-overlayfs &>/dev/null && [[ "$(fuse-overlayfs --version 2>&1 | grep -oP '^fuse-overlayfs: version \K\d+\.\d+')" == "${FUSE_OVERLAYFS_VERSION}" ]]; then
         echo "==> fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} already present, skipping."
     else
         echo "==> Building fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} from source..."
@@ -286,7 +286,7 @@ prepare_for_podman_v6() {
     /usr/lib/podman/aardvark-dns --version
     crun --version | head -1
     conmon --version | head -1
-    fuse-overlayfs --version | head -1
+    fuse-overlayfs --version 2>&1 | grep '^fuse-overlayfs: version'
 
     # ---------- Backup existing config for safety ----------
     BACKUP_NAME=""
@@ -305,8 +305,9 @@ prepare_for_podman_v6() {
 
 
     COMMON_TMPDIR="/tmp/container-libs-common"
-    if git clone --depth 1 --branch "${COMMON_TAG}" https://github.com/podman-container-tools/container-libs.git "${COMMON_TMPDIR}" 2>/dev/null; then
-        sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /etc/containers/containers.conf || echo "Warning: containers.conf copy failed; continuing build..." >&2
+    rm -rf "${COMMON_TMPDIR}"
+    if git clone --depth 1 --branch "${COMMON_TAG}" https://github.com/podman-container-tools/container-libs.git "${COMMON_TMPDIR}"; then
+            sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /etc/containers/containers.conf || echo "Warning: containers.conf copy failed; continuing build..." >&2
         sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /usr/share/containers/containers.conf || echo "Warning: containers.conf copy failed; continuing build..." >&2
         sudo cp "${COMMON_TMPDIR}/image/registries.conf" /etc/containers/registries.conf || echo "Warning: registries.conf copy failed; continuing build..." >&2
         sudo cp "${COMMON_TMPDIR}/storage/storage.conf" /etc/containers/storage.conf || echo "Warning: storage.conf copy failed; continuing build..." >&2
@@ -339,7 +340,7 @@ STOCFG
     aardvark-dns --version
     crun --version | head -1
     conmon --version | head -1
-    fuse-overlayfs --version | head -1
+    fuse-overlayfs --version 2>&1 | grep '^fuse-overlayfs: version'
     echo "Config files in /etc/containers:"
     ls -l /etc/containers/containers.conf /etc/containers/storage.conf
 
