@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# ============================================================
+# Dependency versions – update these when new releases come out
+# ============================================================
+NETAVARK_VERSION="2.0.0"
+AARDVARK_VERSION="2.0.0"
+COMMON_TAG="common/v0.68.1"
+CRUN_VERSION="1.28"
+# ============================================================
+
 # Variable to track binary backup for recovery
 BACKUP_DIR=""
 
@@ -145,11 +154,11 @@ fi
 echo "==> OS Check Passed: $PRETTY_NAME"
 # ----------------------------------------------
 
-# ---------- Podman v6+ preparation (Netavark, Aardvark, configs) ----------
+# ---------- Podman v6+ preparation (Netavark, Aardvark, crun, configs) ----------
 prepare_for_podman_v6() {
     echo "=============================================="
     echo "  Running preparation for Podman v6+"
-    echo "  (Netavark 2.0.0, Aardvark-dns 2.0.0, config)"
+    echo "  (Netavark ${NETAVARK_VERSION}, Aardvark-dns ${AARDVARK_VERSION}, crun ${CRUN_VERSION}, config)"
     echo "=============================================="
 
     # Ensure build tools for netavark/aardvark
@@ -157,54 +166,83 @@ prepare_for_podman_v6() {
     sudo apt update -qq
     sudo apt install -y -qq git make cargo rustc protobuf-compiler
 
-    # ---------- Netavark 2.0.0 ----------
-    if command -v netavark &>/dev/null && [[ "$(netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "2.0.0" ]]; then
-        echo "==> Netavark 2.0.0 already present, skipping."
+    # ---------- Netavark ----------
+    if command -v netavark &>/dev/null && [[ "$(netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "${NETAVARK_VERSION}" ]]; then
+        echo "==> Netavark ${NETAVARK_VERSION} already present, skipping."
     else
-        echo "==> Building Netavark 2.0.0..."
+        echo "==> Building Netavark ${NETAVARK_VERSION}..."
         local neta_dir
         neta_dir=$(mktemp -d)
         cd "$neta_dir"
-        git clone --branch v2.0.0 --depth 1 https://github.com/containers/netavark.git
+        git clone --branch "v${NETAVARK_VERSION}" --depth 1 https://github.com/containers/netavark.git
         cd netavark
         make build
         sudo cp bin/netavark /usr/local/bin/netavark
-        echo "Netavark 2.0.0 installed to /usr/local/bin/netavark"
+        echo "Netavark ${NETAVARK_VERSION} installed to /usr/local/bin/netavark"
         cd /
         rm -rf "$neta_dir"
     fi
 
-    # ---------- Aardvark-dns 2.0.0 ----------
-    if command -v aardvark-dns &>/dev/null && [[ "$(aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "2.0.0" ]]; then
-        echo "==> Aardvark-dns 2.0.0 already present, skipping."
+    # ---------- Aardvark-dns ----------
+    if command -v aardvark-dns &>/dev/null && [[ "$(aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "${AARDVARK_VERSION}" ]]; then
+        echo "==> Aardvark-dns ${AARDVARK_VERSION} already present, skipping."
     else
-        echo "==> Building Aardvark-dns 2.0.0..."
+        echo "==> Building Aardvark-dns ${AARDVARK_VERSION}..."
         local aard_dir
         aard_dir=$(mktemp -d)
         cd "$aard_dir"
-        git clone --branch v2.0.0 --depth 1 https://github.com/containers/aardvark-dns.git
+        git clone --branch "v${AARDVARK_VERSION}" --depth 1 https://github.com/containers/aardvark-dns.git
         cd aardvark-dns
         make build
         sudo cp bin/aardvark-dns /usr/local/bin/aardvark-dns
-        echo "Aardvark-dns 2.0.0 installed to /usr/local/bin/aardvark-dns"
+        echo "Aardvark-dns ${AARDVARK_VERSION} installed to /usr/local/bin/aardvark-dns"
         cd /
         rm -rf "$aard_dir"
     fi
 
     echo "==> Installing netavark and aardvark-dns to /usr/lib/podman/..."
     sudo mkdir -p /usr/lib/podman
-    sudo cp /usr/local/bin/netavark /usr/lib/podman/netavark
+    if [[ "$(/usr/lib/podman/netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" != "${NETAVARK_VERSION}" ]]; then
+        sudo cp /usr/local/bin/netavark /usr/lib/podman/netavark
+    else
+        echo "==> /usr/lib/podman/netavark already ${NETAVARK_VERSION}, skipping."
+    fi
 
-    if [[ "$(/usr/lib/podman/aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" != "2.0.0" ]]; then
+    if [[ "$(/usr/lib/podman/aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" != "${AARDVARK_VERSION}" ]]; then
         pkill -f aardvark-dns 2>/dev/null || true
         sudo cp /usr/local/bin/aardvark-dns /usr/lib/podman/aardvark-dns
     else
-        echo "==> /usr/lib/podman/aardvark-dns already 2.0.0, skipping."
+        echo "==> /usr/lib/podman/aardvark-dns already ${AARDVARK_VERSION}, skipping."
+    fi
+
+    # ---------- crun ----------
+    if command -v crun &>/dev/null && [[ "$(crun --version | head -1 | grep -oP '\d+\.\d+(\.\d+)?')" == "${CRUN_VERSION}" ]]; then
+        echo "==> crun ${CRUN_VERSION} already present, skipping."
+    else
+        echo "==> Installing crun ${CRUN_VERSION} from release binary..."
+        if ! command -v curl &>/dev/null; then
+            sudo apt install -y -qq curl
+        fi
+        local ARCH
+        ARCH=$(uname -m)
+        case "$ARCH" in
+            x86_64)  BIN_ARCH="amd64" ;;
+            aarch64) BIN_ARCH="arm64" ;;
+            *) echo "ERROR: Unsupported architecture $ARCH for prebuilt crun. Please install manually."; exit 1 ;;
+        esac
+        local CRUN_URL="https://github.com/containers/crun/releases/download/${CRUN_VERSION}/crun-${CRUN_VERSION}-linux-${BIN_ARCH}"
+        echo "==> Downloading $CRUN_URL"
+        curl -fSL "$CRUN_URL" -o /tmp/crun-${CRUN_VERSION}
+        chmod +x /tmp/crun-${CRUN_VERSION}
+        sudo cp /tmp/crun-${CRUN_VERSION} /usr/local/bin/crun
+        rm -f /tmp/crun-${CRUN_VERSION}
+        echo "crun ${CRUN_VERSION} installed to /usr/local/bin/crun"
     fi
 
     echo "==> Verifying:"
     /usr/lib/podman/netavark --version
     /usr/lib/podman/aardvark-dns --version
+    crun --version | head -1
 
     # ---------- Backup existing config for safety ----------
     BACKUP_NAME=""
@@ -221,16 +259,18 @@ prepare_for_podman_v6() {
     echo "==> Setting up containers configuration for rootless Podman v6..."
     sudo mkdir -p /etc/containers /usr/share/containers /usr/share/containers/seccomp
 
-    if git clone --depth 1 --branch v0.68.0 https://github.com/containers/common.git /tmp/common-0.68.0 2>/dev/null; then
-        sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /etc/containers/containers.conf
-        sudo cp /tmp/common-0.68.0/pkg/config/containers.conf /usr/share/containers/containers.conf
-        sudo cp /tmp/common-0.68.0/pkg/config/registries.conf /etc/containers/registries.conf
-        sudo cp /tmp/common-0.68.0/pkg/config/storage.conf /etc/containers/storage.conf
-        sudo cp /tmp/common-0.68.0/pkg/seccomp/*.json /usr/share/containers/seccomp/ 2>/dev/null || true
-        rm -rf /tmp/common-0.68.0
-        echo "Installed official containers-common v0.68.0 configs."
+
+    COMMON_TMPDIR="/tmp/container-libs-common"
+    if git clone --depth 1 --branch "${COMMON_TAG}" https://github.com/podman-container-tools/container-libs.git "${COMMON_TMPDIR}" 2>/dev/null; then
+        sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /etc/containers/containers.conf
+        sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /usr/share/containers/containers.conf
+        sudo cp "${COMMON_TMPDIR}/common/pkg/config/registries.conf" /etc/containers/registries.conf
+        sudo cp "${COMMON_TMPDIR}/common/pkg/config/storage.conf" /etc/containers/storage.conf
+        sudo cp "${COMMON_TMPDIR}/common/pkg/seccomp/"*.json /usr/share/containers/seccomp/ 2>/dev/null || true
+        rm -rf "${COMMON_TMPDIR}"
+        echo "Installed official containers-common ${COMMON_TAG} configs."
     else
-        echo "Tag v0.68.0 not found; creating minimal rootless config."
+        echo "Tag ${COMMON_TAG} not found; creating minimal rootless config."
         cat <<'CFG' | sudo tee /etc/containers/containers.conf > /dev/null
 [engine]
 events_logger = "journald"
@@ -253,6 +293,7 @@ STOCFG
     echo "New versions:"
     netavark --version
     aardvark-dns --version
+    crun --version | head -1
     echo "Config files in /etc/containers:"
     ls -l /etc/containers/containers.conf /etc/containers/storage.conf
 
@@ -286,8 +327,8 @@ if [[ "$MAJOR_TARGET" -ge 6 ]]; then
         fi
     }
 
-    check_binary_version /usr/lib/podman/netavark "2.0.0" "netavark"
-    check_binary_version /usr/lib/podman/aardvark-dns "2.0.0" "aardvark-dns"
+    check_binary_version /usr/lib/podman/netavark "${NETAVARK_VERSION}" "netavark"
+    check_binary_version /usr/lib/podman/aardvark-dns "${AARDVARK_VERSION}" "aardvark-dns"
 
     if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
         echo "ERROR: Missing required runtime dependencies for Podman v6:"
@@ -329,6 +370,10 @@ fi
 # netavark and aardvark-dns are intentionally excluded here —
 # for Podman v6, versions 2.0.0+ are required and were installed
 # by the preparation step above.
+# crun IS included here even for v6 targets: apt's version is superseded
+# by /usr/local/bin/crun (built in prepare_for_podman_v6, which precedes
+# apt's /usr/bin/crun in PATH) — but it's still required as-is for v5
+# targets, where prepare_for_podman_v6() never runs.
 sudo apt update
 sudo apt install -y golang-github-containers-common git golang-go make gcc pkg-config libgpgme-dev libassuan-dev libseccomp-dev libdevmapper-dev libglib2.0-dev libsystemd-dev libselinux1-dev libapparmor-dev libbtrfs-dev btrfs-progs conmon crun passt nftables uidmap libsubid-dev
 # Go version check
@@ -454,5 +499,5 @@ echo "  ** NOTE: Podman hardcodes netavark/aardvark-dns to /usr/lib/podman/ —"
 echo "     if networks fail in 6.x.x, verify versions with:"
 echo "       /usr/lib/podman/netavark --version"
 echo "       /usr/lib/podman/aardvark-dns --version"
-echo "     Both should report 2.0.0 for Podman v6.x.x"
+echo "     netavark should report ${NETAVARK_VERSION}, aardvark-dns should report ${AARDVARK_VERSION}""
 echo "=============================================="
