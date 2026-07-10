@@ -8,6 +8,7 @@ NETAVARK_VERSION="2.0.0"
 AARDVARK_VERSION="2.0.0"
 COMMON_TAG="common/v0.68.1"
 CRUN_VERSION="1.28"
+CONMON_VERSION="2.2.1"
 # ============================================================
 
 # Variable to track binary backup for recovery
@@ -158,13 +159,13 @@ echo "==> OS Check Passed: $PRETTY_NAME"
 prepare_for_podman_v6() {
     echo "=============================================="
     echo "  Running preparation for Podman v6+"
-    echo "  (Netavark ${NETAVARK_VERSION}, Aardvark-dns ${AARDVARK_VERSION}, crun ${CRUN_VERSION}, config ${COMMON_TAG})"
+    echo "  (Netavark ${NETAVARK_VERSION}, Aardvark-dns ${AARDVARK_VERSION}, crun ${CRUN_VERSION}, conmon ${CONMON_VERSION}, config ${COMMON_TAG})"
     echo "=============================================="
 
     # Ensure build tools for netavark/aardvark
     echo "==> Installing build dependencies for Netavark/Aardvark..."
     sudo apt update -qq
-    sudo apt install -y -qq git make cargo rustc protobuf-compiler
+    sudo apt install -y -qq git make cargo rustc protobuf-compiler gcc libc6-dev libglib2.0-dev libseccomp-dev pkg-config runc
 
     # ---------- Netavark ----------
     if command -v netavark &>/dev/null && [[ "$(netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "${NETAVARK_VERSION}" ]]; then
@@ -239,10 +240,29 @@ prepare_for_podman_v6() {
         echo "crun ${CRUN_VERSION} installed to /usr/local/bin/crun"
     fi
 
+    # ---------- conmon ----------
+    # Source: https://github.com/containers/conmon/releases/tag/v2.2.1
+    if command -v conmon &>/dev/null && [[ "$(conmon --version 2>/dev/null | head -1 | grep -oP '\d+\.\d+\.\d+')" == "${CONMON_VERSION}" ]]; then
+        echo "==> conmon ${CONMON_VERSION} already present, skipping."
+    else
+        echo "==> Building conmon ${CONMON_VERSION} from source..."
+        local conmon_dir
+        conmon_dir=$(mktemp -d)
+        cd "$conmon_dir"
+        git clone --branch "v${CONMON_VERSION}" --depth 1 https://github.com/containers/conmon.git
+        cd conmon
+        make
+        sudo cp bin/conmon /usr/local/bin/conmon
+        echo "conmon ${CONMON_VERSION} installed to /usr/local/bin/conmon"
+        cd /
+        rm -rf "$conmon_dir"
+    fi
+
     echo "==> Verifying:"
     /usr/lib/podman/netavark --version
     /usr/lib/podman/aardvark-dns --version
     crun --version | head -1
+    conmon --version | head -1
 
     # ---------- Backup existing config for safety ----------
     BACKUP_NAME=""
@@ -294,6 +314,7 @@ STOCFG
     netavark --version
     aardvark-dns --version
     crun --version | head -1
+    conmon --version | head -1
     echo "Config files in /etc/containers:"
     ls -l /etc/containers/containers.conf /etc/containers/storage.conf
 
@@ -370,10 +391,11 @@ fi
 # netavark and aardvark-dns are intentionally excluded here —
 # for Podman v6, versions 2.0.0+ are required and were installed
 # by the preparation step above.
-# crun IS included here even for v6 targets: apt's version is superseded
-# by /usr/local/bin/crun (built in prepare_for_podman_v6, which precedes
-# apt's /usr/bin/crun in PATH) — but it's still required as-is for v5
-# targets, where prepare_for_podman_v6() never runs.
+# crun and conmon ARE included here even for v6 targets: apt's versions
+# are superseded by /usr/local/bin/crun and /usr/local/bin/conmon (built
+# in prepare_for_podman_v6, which precedes apt's /usr/bin copies in PATH)
+# — but they're still required as-is for v5 targets, where
+# prepare_for_podman_v6() never runs.
 sudo apt update
 sudo apt install -y golang-github-containers-common git golang-go make gcc pkg-config libgpgme-dev libassuan-dev libseccomp-dev libdevmapper-dev libglib2.0-dev libsystemd-dev libselinux1-dev libapparmor-dev libbtrfs-dev btrfs-progs conmon crun passt nftables uidmap libsubid-dev
 # Go version check
