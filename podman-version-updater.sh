@@ -262,10 +262,10 @@ prepare_for_podman_v6() {
 
     COMMON_TMPDIR="/tmp/container-libs-common"
     if git clone --depth 1 --branch "${COMMON_TAG}" https://github.com/podman-container-tools/container-libs.git "${COMMON_TMPDIR}" 2>/dev/null; then
-        sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /etc/containers/containers.conf
-        sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /usr/share/containers/containers.conf
-        sudo cp "${COMMON_TMPDIR}/common/pkg/config/registries.conf" /etc/containers/registries.conf
-        sudo cp "${COMMON_TMPDIR}/common/pkg/config/storage.conf" /etc/containers/storage.conf
+        sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /etc/containers/containers.conf || echo "Warning: containers.conf copy failed; continuing build..." >&2
+        sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /usr/share/containers/containers.conf || echo "Warning: containers.conf copy failed; continuing build..." >&2
+        sudo cp "${COMMON_TMPDIR}/image/registries.conf" /etc/containers/registries.conf || echo "Warning: registries.conf copy failed; continuing build..." >&2
+        sudo cp "${COMMON_TMPDIR}/storage/storage.conf" /etc/containers/storage.conf || echo "Warning: storage.conf copy failed; continuing build..." >&2
         sudo cp "${COMMON_TMPDIR}/common/pkg/seccomp/"*.json /usr/share/containers/seccomp/ 2>/dev/null || true
         rm -rf "${COMMON_TMPDIR}"
         echo "Installed official containers-common ${COMMON_TAG} configs."
@@ -499,5 +499,5 @@ echo "  ** NOTE: Podman hardcodes netavark/aardvark-dns to /usr/lib/podman/ —"
 echo "     if networks fail in 6.x.x, verify versions with:"
 echo "       /usr/lib/podman/netavark --version"
 echo "       /usr/lib/podman/aardvark-dns --version"
-echo "     netavark should report ${NETAVARK_VERSION}, aardvark-dns should report ${AARDVARK_VERSION}""
+echo "     netavark should report ${NETAVARK_VERSION}, aardvark-dns should report ${AARDVARK_VERSION}"
 echo "=============================================="
