@@ -158,7 +158,7 @@ echo "==> OS Check Passed: $PRETTY_NAME"
 prepare_for_podman_v6() {
     echo "=============================================="
     echo "  Running preparation for Podman v6+"
-    echo "  (Netavark ${NETAVARK_VERSION}, Aardvark-dns ${AARDVARK_VERSION}, crun ${CRUN_VERSION}, config)"
+    echo "  (Netavark ${NETAVARK_VERSION}, Aardvark-dns ${AARDVARK_VERSION}, crun ${CRUN_VERSION}, config ${COMMON_TAG})"
     echo "=============================================="
 
     # Ensure build tools for netavark/aardvark
