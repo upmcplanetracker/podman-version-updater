@@ -11,36 +11,305 @@ CRUN_VERSION="1.28"
 CONMON_VERSION="2.2.1"
 FUSE_OVERLAYFS_VERSION="1.17"
 # ============================================================
+# run update once
+sudo apt-get update -qq
 
-# Variable to track binary backup for recovery
-BACKUP_DIR=""
+# ============================================================
+# Packaging scaffolding (Task 0)
+#
+# All components are built, wrapped in a transient .deb via fpm,
+# installed with `apt-get install ./*.deb` (so real dependency
+# resolution runs), then the .deb and staging dir are deleted.
+# Nothing is retained on disk — dpkg's own database is the
+# source of truth for what's installed, exactly as if a real
+# apt repo had shipped this version. This is what makes
+# `dpkg -l`, `apt-get remove`, and `apt-mark hold` work natively
+# instead of the old manual /usr/local binary bookkeeping.
+# ============================================================
+
+ensure_fpm_installed() {
+    if command -v fpm &>/dev/null; then
+        return 0
+    fi
+    echo "==> fpm not found; installing (required for .deb packaging)..."
+    sudo apt-get install -y -qq ruby ruby-dev build-essential
+    sudo gem install --no-document fpm
+    if ! command -v fpm &>/dev/null; then
+        echo "ERROR: fpm installation failed. Cannot proceed with packaging."
+        exit 1
+    fi
+    echo "==> fpm installed: $(fpm --version)"
+}
+
+# build_and_install_deb <component_name> <version> <stage_dir> <depends...>
+#
+# <stage_dir> must already contain the fully staged install tree,
+# rooted such that paths like usr/bin/<binary> are correct relative
+# to <stage_dir> (i.e. what you'd get from `make DESTDIR=<stage_dir>
+# PREFIX=/usr install`, or manual staging for non-make components).
+#
+# Optional env vars honored if set before calling:
+#   POSTINST_SCRIPT   - path to an --after-install script
+#   PRERM_SCRIPT       - path to a --before-remove script
+#
+# On success: component is installed via apt, staging dir and the
+# built .deb are removed, and the package is apt-mark held.
+build_and_install_deb() {
+    local component="$1"
+    local version="$2"
+    local stage_dir="$3"
+    shift 3
+    local depends=("$@")
+
+    ensure_fpm_installed
+
+    local deb_path
+    deb_path="$(mktemp -u /tmp/${component}-build-XXXXXX.deb)"
+
+    local fpm_args=(
+        -s dir -t deb
+        -n "$component"
+        -v "$version"
+        --iteration 1
+        --architecture amd64
+        --deb-no-default-config-files
+        -p "$deb_path"
+        -C "$stage_dir"
+    )
+
+    local dep
+    for dep in "${depends[@]}"; do
+        fpm_args+=(-d "$dep")
+    done
+
+    if [[ -n "${POSTINST_SCRIPT:-}" ]]; then
+        fpm_args+=(--after-install "$POSTINST_SCRIPT")
+    fi
+    if [[ -n "${PRERM_SCRIPT:-}" ]]; then
+        fpm_args+=(--before-remove "$PRERM_SCRIPT")
+    fi
+
+    echo "==> Packaging ${component} ${version} as .deb..."
+    fpm "${fpm_args[@]}" .
+
+    echo "==> Installing ${component} ${version} via apt..."
+    sudo apt-get install -y "$deb_path"
+
+    echo "==> Holding ${component} at ${version} (apt-mark hold)..."
+    sudo apt-mark hold "$component" >/dev/null
+
+    echo "==> Cleaning up staging artifacts for ${component}..."
+    rm -f "$deb_path"
+    rm -rf "$stage_dir"
+}
+
+# normalize_podman_version <input>
+#
+# Accepts: v6.0.1 | 6.0.1 | 601 | latest | v6.0.1-rc1 | 6.0.1-beta
+# Rejects: any other compact digit run (6010, 61, etc.) — ambiguous
+# splits are refused rather than guessed at; the caller must use
+# dotted notation for anything that isn't exactly 3 compact digits.
+#
+# Prints the normalized "vX.Y.Z" (or "vX.Y.Z-suffix") to stdout.
+normalize_podman_version() {
+    local input="$1"
+
+    if [[ "$input" == "latest" ]]; then
+        echo "latest"
+        return 0
+    fi
+
+    # Strip a leading v/V if present
+    local body="${input#v}"
+    body="${body#V}"
+
+    # Split off a prerelease suffix if present (e.g. -rc1, -beta)
+    local base="$body"
+    local suffix=""
+    if [[ "$body" == *-* ]]; then
+        base="${body%%-*}"
+        suffix="-${body#*-}"
+    fi
+
+    local normalized_base=""
+    if [[ "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        # Already dotted: X.Y.Z
+        normalized_base="$base"
+    elif [[ "$base" =~ ^[0-9]{3}$ ]]; then
+        # Exactly 3 compact digits: 601 -> 6.0.1
+        normalized_base="${base:0:1}.${base:1:1}.${base:2:1}"
+    else
+        echo "ERROR: Cannot parse version '$input'." >&2
+        echo "       Accepted formats: v6.0.1, 6.0.1, 601, latest, v6.0.1-rc1" >&2
+        echo "       Compact digit input must be exactly 3 digits (e.g. 601)." >&2
+        echo "       For anything else, use dotted notation (e.g. 6.10.0)." >&2
+        return 1
+    fi
+
+    echo "v${normalized_base}${suffix}"
+}
+
+# fetch_podman_tags_cached
+#
+# Populates PODMAN_TAGS_CACHE on first call, reused by subsequent calls
+# within the same script run (stays well within the unauthenticated
+# 60 req/hr GitHub API limit). Deliberately assigns to a local variable
+# first and only commits to the cache after confirming the fetch
+# actually succeeded AND returned at least one well-formed tag line —
+# a mid-transfer network drop can make `curl | grep` exit non-zero
+# while bash has still captured partial output into the assignment
+# target, so checking the exit code alone isn't enough to avoid
+# caching garbage that later calls would then trust without retrying.
+PODMAN_TAGS_CACHE=""
+fetch_podman_tags_cached() {
+    if [[ -n "$PODMAN_TAGS_CACHE" ]]; then
+        return 0
+    fi
+
+    echo "==> Fetching containers/podman tag list from GitHub..." >&2
+    local fetched fetch_status
+    # Wrapped in an `if` rather than a bare assignment: with `set -e`
+    # active script-wide, a bare `fetched="$(...)"` that fails would
+    # abort the whole script immediately, before we ever get to check
+    # $fetch_status below. Commands in an if-condition are exempt from
+    # -e, which is exactly what lets us handle the failure gracefully
+    # here instead.
+    if fetched="$(curl -fsSL "https://api.github.com/repos/containers/podman/tags?per_page=100" \
+        | grep -oP '"name":\s*"\K[^"]+')"; then
+        fetch_status=0
+    else
+        fetch_status=$?
+    fi
+
+    if [[ $fetch_status -ne 0 ]] || [[ -z "$fetched" ]]; then
+        echo "ERROR: Failed to fetch tags from GitHub API (empty or partial response)." >&2
+        return 1
+    fi
+
+    PODMAN_TAGS_CACHE="$fetched"
+    return 0
+}
+
+# validate_podman_tag <normalized_tag>
+#
+# Confirms the tag exists in containers/podman's GitHub tags.
+validate_podman_tag() {
+    local tag="$1"
+
+    fetch_podman_tags_cached || return 1
+
+    if grep -qxF "$tag" <<< "$PODMAN_TAGS_CACHE"; then
+        return 0
+    fi
+
+    echo "ERROR: Tag '$tag' not found in containers/podman releases." >&2
+    echo "       Closest matches:" >&2
+    grep -F "${tag:0:4}" <<< "$PODMAN_TAGS_CACHE" | head -5 | sed 's/^/         /' >&2
+    return 1
+}
+
+# resolve_latest_podman_tag
+#
+# Returns the newest non-prerelease tag for containers/podman.
+resolve_latest_podman_tag() {
+    fetch_podman_tags_cached || return 1
+    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$PODMAN_TAGS_CACHE" | sort -V | tail -1
+}
+# ============================================================
+
+# ============================================================
+# Quadlet-aware container stop/start
+#
+# `podman stop --all` / `podman start <name>` talk to the Podman API
+# directly, completely bypassing systemd. For a container actually
+# running as a Quadlet-generated .service unit, that's a real problem:
+# systemd's own view of the unit's state goes stale (it thinks the
+# unit is inactive when the container is actually running again,
+# started outside its supervision), which breaks `systemctl --user
+# status`, WantedBy=/dependency chains, and journal correlation for
+# that unit. So Quadlet-managed containers get stopped and restarted
+# via `systemctl --user`, not via podman; only containers with no
+# corresponding active Quadlet unit fall back to the plain podman
+# ps/start path below.
+# ============================================================
+
+# discover_active_quadlet_units
+#
+# Recursively scans ~/.config/containers/systemd (Podman allows nested
+# subdirectories there, and Quadlet unit names are derived from the
+# file's basename regardless of which subdirectory it lives in) for
+# .container/.pod/.kube Quadlet unit files, and prints a
+# "<unit>.service<TAB><container_name>" line for each one that is
+# currently an active user-level systemd unit.
+#
+# container_name is read from a ContainerName= directive in the unit
+# file if present; otherwise it defaults to Quadlet's own naming
+# convention (systemd-<unit-name>). This lets the caller correctly
+# exclude these containers from the generic podman-ps-based restart
+# path, so we never call `podman start` on something systemd already
+# owns.
+discover_active_quadlet_units() {
+    local quadlet_dir="$HOME/.config/containers/systemd"
+    [[ -d "$quadlet_dir" ]] || return 0
+
+    local unit_file unit_name container_name
+    while IFS= read -r -d '' unit_file; do
+        unit_name="$(basename "$unit_file")"
+        unit_name="${unit_name%.*}"
+        if systemctl --user is-active --quiet "${unit_name}.service" 2>/dev/null; then
+            container_name="$(grep -oP '^\s*ContainerName\s*=\s*\K.*' "$unit_file" 2>/dev/null | tail -1)"
+            [[ -z "$container_name" ]] && container_name="systemd-${unit_name}"
+            printf '%s\t%s\n' "${unit_name}.service" "$container_name"
+        fi
+    done < <(find "$quadlet_dir" -type f \( -name '*.container' -o -name '*.pod' -o -name '*.kube' \) -print0 2>/dev/null)
+}
+# ============================================================
+
+# Staging dirs created by build_and_install_deb calls are cleaned up
+# inside that function on success; on failure the trap below just
+# reports state rather than trying to manually restore files. Nothing
+# on the real filesystem is touched until a component's .deb is built
+# and `apt install` succeeds, so an early failure leaves whatever was
+# previously installed (tracked by dpkg) completely untouched.
 
 cleanup_on_failure() {
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    echo "ERROR: Something went wrong. The script will now clean up any"
-    echo "partially installed files so your existing Podman keeps working."
-    # Restore from backup if an upgrade was in progress
-    if [[ -n "${BACKUP_DIR:-}" && -d "$BACKUP_DIR" ]] && [ "$(ls -A "$BACKUP_DIR")" ]; then
-        echo "Restoring your previously installed Podman binaries..."
-        sudo cp -a "$BACKUP_DIR"/bin/* /usr/local/bin/ 2>/dev/null || true
-        sudo cp -a "$BACKUP_DIR"/libexec/* /usr/local/libexec/ 2>/dev/null || true
-        sudo cp -a "$BACKUP_DIR"/share/* /usr/local/share/man/man1/ 2>/dev/null || true
-        echo "Restore complete."
-    else
-        sudo rm -f /usr/local/bin/podman /usr/local/bin/podman-remote 2>/dev/null || true
-        sudo rm -rf /usr/local/libexec/podman 2>/dev/null || true
-        sudo rm -rf /usr/local/share/man/man1/podman* 2>/dev/null || true
-    fi
+    echo "ERROR: Something went wrong during the build/package/install"
+    echo "sequence. Since each component is only installed via apt after"
+    echo "its .deb is successfully built, whatever was installed before"
+    echo "this run should be untouched. Check current state with:"
+    echo "  dpkg -l | grep -E 'podman|conmon|crun|netavark|aardvark|containers-common'"
+    echo "  (fuse-overlayfs isn't apt-tracked by design — check its version directly:"
+    echo "   fuse-overlayfs --version)"
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    [[ -n "${WORKDIR:-}" && -d "${WORKDIR}" ]] && rm -rf "$WORKDIR" || true    
+    [[ -n "${WORKDIR:-}" && -d "${WORKDIR}" ]] && rm -rf "$WORKDIR" || true
+    [[ -n "${PODMAN_STAGE:-}" && -d "${PODMAN_STAGE}" ]] && rm -rf "$PODMAN_STAGE" || true
+    # Best-effort: if we'd already stopped Quadlet services and/or
+    # generic containers before this failure hit, try to bring them
+    # back up the same correct way the normal success path would.
+    if [[ -n "${QUADLET_UNITS_FILE:-}" && -s "${QUADLET_UNITS_FILE:-}" ]]; then
+        echo "Attempting to restart Quadlet-managed services that may have been stopped..."
+        while IFS=$'\t' read -r unit_name _container_name; do
+            [[ -z "$unit_name" ]] && continue
+            systemctl --user start "$unit_name" 2>/dev/null || true
+        done < "$QUADLET_UNITS_FILE"
+    fi
+    [[ -n "${QUADLET_UNITS_FILE:-}" && -f "${QUADLET_UNITS_FILE}" ]] && rm -f "$QUADLET_UNITS_FILE" || true
+    if [[ -s ~/podman-state-backup.txt ]]; then
+        echo "Attempting to restart other containers that may have been stopped..."
+        while read -r container; do
+            [[ -n "$container" ]] && podman start "$container" 2>/dev/null || true
+        done < ~/podman-state-backup.txt
+        rm -f ~/podman-state-backup.txt
+    fi
     systemctl --user daemon-reload 2>/dev/null || true
     hash -r
     if command -v podman &>/dev/null; then
-        echo "Old Podman version is still available:"
+        echo "Podman is still available at this version:"
         podman --version
     else
-        echo "No Podman binary found. You may need to reinstall it."
+        echo "No Podman binary found. You may need to reinstall it (sudo apt install podman)."
     fi
     exit 1
 }
@@ -49,12 +318,22 @@ trap cleanup_on_failure ERR
 usage() {
     cat <<EOF
 Usage:
-  Update:   $0 <RELEASE_TAG_URL>
-  Rollback: $0 --rollback
+  Update:            $0 <VERSION>
+  Rollback:          $0 --rollback <VERSION>
+  Rollback to stock:  $0 --rollback-to-stock
   NOTE: Podman must already be installed (sudo apt install podman) before running this script.
 
-  The <RELEASE_TAG_URL> must be a GitHub release tag URL, e.g.:
-      https://github.com/podman-container-tools/podman/releases/tag/v5.8.5
+  <VERSION> accepts any of:
+      v6.0.1        6.0.1        601 (exactly 3 digits)
+      latest        v6.0.1-rc1   6.0.1-beta
+
+  Rollback rebuilds the given older version and reinstalls it via apt
+  (same build/package/install path as a normal upgrade, just targeting
+  an older tag).
+
+  Rollback-to-stock removes the custom-built packages entirely and
+  reinstalls whatever version Ubuntu's own repo provides for podman
+  and its dependencies.
 EOF
     exit 1
 }
@@ -63,73 +342,81 @@ if [[ $# -lt 1 ]]; then
     usage
 fi
 
-# ---------- ROLLBACK MODE ----------
-if [[ "$1" == "--rollback" ]]; then
+# ---------- ROLLBACK-TO-STOCK MODE ----------
+if [[ "$1" == "--rollback-to-stock" ]]; then
     echo "=============================================================="
-    echo "  ROLLBACK MODE: Reverting to the apt-managed Podman version"
+    echo "  ROLLBACK-TO-STOCK MODE: Reverting to Ubuntu repo packages"
     echo "=============================================================="
 
-    if [[ ! -f /usr/local/bin/podman ]] && [[ ! -d /usr/local/libexec/podman ]]; then
-        echo "No locally installed Podman found in /usr/local. Nothing to roll back."
-        exit 0
-    fi
+    # fuse-overlayfs isn't in this list — it was never apt-installed by
+    # this script (see the fuse-overlayfs section below for why), so
+    # there's no hold to release. It's handled separately just below.
+    STOCK_COMPONENTS=(podman conmon crun netavark aardvark-dns containers-common)
 
-    USER_SERVICE_ACTIVE=false
-    if systemctl --user is-active --quiet podman.service 2>/dev/null; then USER_SERVICE_ACTIVE=true; fi
-    USER_SOCKET_ACTIVE=false
-    if systemctl --user is-active --quiet podman.socket 2>/dev/null; then USER_SOCKET_ACTIVE=true; fi
+    echo "==> Stopping Podman services..."
+    systemctl --user stop podman.socket podman.service 2>/dev/null || true
 
-    echo "==> Stopping any running Podman user services..."
-    if [[ "$USER_SERVICE_ACTIVE" == true ]]; then systemctl --user stop podman.service 2>/dev/null || true; fi
-    if [[ "$USER_SOCKET_ACTIVE" == true ]]; then systemctl --user stop podman.socket 2>/dev/null || true; fi
+    echo "==> Releasing apt-mark hold on custom-built packages..."
+    for c in "${STOCK_COMPONENTS[@]}"; do
+        sudo apt-mark unhold "$c" 2>/dev/null || true
+    done
 
-    echo "==> Disabling and masking system-level Podman services (rootless Quadlet setup only)..."
-    sudo systemctl disable --now \
-        podman.service podman.socket \
-        podman-auto-update.service podman-auto-update.timer \
-        podman-clean-transient.service podman-restart.service 2>/dev/null || true
-    sudo systemctl mask \
-        podman.service podman.socket \
-        podman-auto-update.service podman-auto-update.timer \
-        podman-clean-transient.service podman-restart.service 2>/dev/null || true
-    sudo systemctl daemon-reload
-    echo "==> System-level Podman services masked. User-level Quadlet services unaffected."
-    echo "    (masking prevents systemd preset processing from re-enabling them on future upgrades)"
+    echo "==> Reinstalling from Ubuntu's repo..."
+    sudo apt-get install -y --reinstall podman conmon crun
 
-    echo "==> Removing locally installed Podman from /usr/local..."
-    sudo rm -f /usr/local/bin/podman /usr/local/bin/podman-remote 2>/dev/null || true
-    sudo rm -rf /usr/local/libexec/podman 2>/dev/null || true
-    sudo rm -rf /usr/local/share/man/man1/podman* 2>/dev/null || true
+    echo "==> Removing custom fuse-overlayfs build from /usr/local/bin..."
+    # Not dpkg-tracked, so a stock reinstall alone wouldn't take effect —
+    # /usr/local/bin still precedes /usr/bin in $PATH. Remove it directly
+    # so Ubuntu's own fuse-overlayfs package (still owning /usr/bin/fuse-overlayfs
+    # the whole time) is what actually gets found again.
+    sudo rm -f /usr/local/bin/fuse-overlayfs
+    sudo apt-get install -y --reinstall fuse-overlayfs 2>/dev/null || true
 
     systemctl --user daemon-reload
     hash -r
 
-    if [[ "$USER_SOCKET_ACTIVE" == true ]]; then systemctl --user start podman.socket 2>/dev/null || true; fi
-    if [[ "$USER_SERVICE_ACTIVE" == true ]]; then systemctl --user start podman.service 2>/dev/null || true; fi
-
     echo ""
     echo "=============================================="
-    echo "Rollback complete. System Podman version is now:"
+    echo "Rollback-to-stock complete. System Podman version is now:"
     podman --version
-    echo "If this is not reporting the expected version you"
-    echo "may need to 'hash -r' again from the terminal"
     echo "=============================================="
     exit 0
 fi
 
-if [[ $# -ne 1 ]]; then usage; fi
-RELEASE_URL="$1"
-
-if [[ ! "$RELEASE_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/tag/(.+)$ ]]; then
-    echo "ERROR: URL must be a GitHub release tag URL, e.g.:"
-    echo "       https://github.com/podman-container-tools/podman/releases/tag/v5.8.5"
-    exit 1
+# ---------- ROLLBACK (rebuild older tag) MODE ----------
+if [[ "$1" == "--rollback" ]]; then
+    if [[ $# -ne 2 ]]; then
+        echo "ERROR: --rollback requires a version, e.g. '$0 --rollback v6.0.0'"
+        exit 1
+    fi
+    echo "=============================================================="
+    echo "  ROLLBACK MODE: Rebuilding and reinstalling an older version"
+    echo "=============================================================="
+    # Falls through to the normal build/package/install path below using
+    # the requested version — dpkg treats this as a normal downgrade
+    # reinstall of the same package name.
+    set -- "$2"
 fi
 
-OWNER="${BASH_REMATCH[1]}"
-REPO="${BASH_REMATCH[2]}"
-TAG="${BASH_REMATCH[3]}"
-REPO_URL="https://github.com/${OWNER}/${REPO}"
+if [[ $# -ne 1 ]]; then usage; fi
+
+NORMALIZED_INPUT="$(normalize_podman_version "$1")" || exit 1
+
+if [[ "$NORMALIZED_INPUT" == "latest" ]]; then
+    echo "==> Resolving 'latest' podman tag from GitHub..."
+    TAG="$(resolve_latest_podman_tag)"
+    if [[ -z "$TAG" ]]; then
+        echo "ERROR: Could not resolve latest tag from GitHub API."
+        exit 1
+    fi
+    echo "==> Latest tag resolved: $TAG"
+else
+    TAG="$NORMALIZED_INPUT"
+fi
+
+validate_podman_tag "$TAG" || exit 1
+
+REPO_URL="https://github.com/containers/podman"
 TAG_VERSION="${TAG#v}"
 
 # Define versioning requirements
@@ -166,12 +453,15 @@ prepare_for_podman_v6() {
 
     # Ensure build tools for netavark/aardvark
     echo "==> Installing build dependencies for Netavark/Aardvark..."
-    sudo apt update -qq
-    sudo apt install -y -qq git make cargo rustc protobuf-compiler gcc libc6-dev libglib2.0-dev libseccomp-dev pkg-config runc libfuse3-dev autoconf automake libtool
+    sudo apt-get install -y -qq git make cargo rustc protobuf-compiler gcc libc6-dev libglib2.0-dev libseccomp-dev pkg-config runc libfuse3-dev autoconf automake libtool
 
     # ---------- Netavark ----------
-    if command -v netavark &>/dev/null && [[ "$(netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "${NETAVARK_VERSION}" ]]; then
-        echo "==> Netavark ${NETAVARK_VERSION} already present, skipping."
+    # Packaged as a .deb (Task 4). Podman hardcodes its network binary
+    # lookup to /usr/lib/podman/ regardless of $PATH, so the postinst
+    # below places a symlink there — this replaces the manual `cp` step
+    # that used to run inline in this script after every build.
+    if dpkg-query -W -f='${Version}' netavark 2>/dev/null | grep -qF "${NETAVARK_VERSION}-1"; then
+        echo "==> Netavark ${NETAVARK_VERSION} already installed via apt, skipping."
     else
         echo "==> Building Netavark ${NETAVARK_VERSION}..."
         local neta_dir
@@ -180,15 +470,44 @@ prepare_for_podman_v6() {
         git clone --branch "v${NETAVARK_VERSION}" --depth 1 https://github.com/containers/netavark.git
         cd netavark
         make build
-        sudo cp bin/netavark /usr/local/bin/netavark
-        echo "Netavark ${NETAVARK_VERSION} installed to /usr/local/bin/netavark"
+
+        echo "==> Staging netavark for packaging..."
+        local neta_stage
+        neta_stage="$(mktemp -d /tmp/netavark-pkg-XXXXXX)"
+        mkdir -p "$neta_stage/usr/bin"
+        cp bin/netavark "$neta_stage/usr/bin/netavark"
+
+        local neta_postinst neta_prerm
+        neta_postinst="$(mktemp /tmp/netavark-postinst-XXXXXX.sh)"
+        neta_prerm="$(mktemp /tmp/netavark-prerm-XXXXXX.sh)"
+        cat > "$neta_postinst" <<'POSTINST'
+#!/bin/sh
+set -e
+mkdir -p /usr/lib/podman
+ln -sf /usr/bin/netavark /usr/lib/podman/netavark
+POSTINST
+        cat > "$neta_prerm" <<'PRERM'
+#!/bin/sh
+set -e
+rm -f /usr/lib/podman/netavark
+PRERM
+        chmod 755 "$neta_postinst" "$neta_prerm"
+
+        # Real shared-library deps resolved via `ldd bin/netavark` + `dpkg -S`.
+        POSTINST_SCRIPT="$neta_postinst" PRERM_SCRIPT="$neta_prerm" \
+            build_and_install_deb "netavark" "${NETAVARK_VERSION}" "$neta_stage" \
+            "libc6"
+
+        rm -f "$neta_postinst" "$neta_prerm"
         cd /
         rm -rf "$neta_dir"
+        echo "Netavark ${NETAVARK_VERSION} installed via apt."
     fi
 
     # ---------- Aardvark-dns ----------
-    if command -v aardvark-dns &>/dev/null && [[ "$(aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" == "${AARDVARK_VERSION}" ]]; then
-        echo "==> Aardvark-dns ${AARDVARK_VERSION} already present, skipping."
+    # Same /usr/lib/podman/ hardcoded-lookup handling as netavark above.
+    if dpkg-query -W -f='${Version}' aardvark-dns 2>/dev/null | grep -qF "${AARDVARK_VERSION}-1"; then
+        echo "==> Aardvark-dns ${AARDVARK_VERSION} already installed via apt, skipping."
     else
         echo "==> Building Aardvark-dns ${AARDVARK_VERSION}..."
         local aard_dir
@@ -197,34 +516,59 @@ prepare_for_podman_v6() {
         git clone --branch "v${AARDVARK_VERSION}" --depth 1 https://github.com/containers/aardvark-dns.git
         cd aardvark-dns
         make build
-        sudo cp bin/aardvark-dns /usr/local/bin/aardvark-dns
-        echo "Aardvark-dns ${AARDVARK_VERSION} installed to /usr/local/bin/aardvark-dns"
+
+        echo "==> Staging aardvark-dns for packaging..."
+        local aard_stage
+        aard_stage="$(mktemp -d /tmp/aardvark-dns-pkg-XXXXXX)"
+        mkdir -p "$aard_stage/usr/bin"
+        cp bin/aardvark-dns "$aard_stage/usr/bin/aardvark-dns"
+
+        local aard_postinst aard_prerm
+        aard_postinst="$(mktemp /tmp/aardvark-dns-postinst-XXXXXX.sh)"
+        aard_prerm="$(mktemp /tmp/aardvark-dns-prerm-XXXXXX.sh)"
+        # IMPORTANT: use `pkill -x` (exact process name), never `pkill -f`
+        # (full command line) here. This postinst runs *during*
+        # `apt install ./aardvark-dns-build-XXXXXX.deb` — that apt/dpkg
+        # process's own command line contains the string "aardvark-dns"
+        # (from the .deb filename), so `pkill -f aardvark-dns` matches
+        # and kills the apt install that's currently running this very
+        # script, aborting the install mid-flight. `-x` only matches the
+        # actual aardvark-dns binary's process name and can't hit apt.
+        cat > "$aard_postinst" <<'POSTINST'
+#!/bin/sh
+set -e
+pkill -x aardvark-dns 2>/dev/null || true
+mkdir -p /usr/lib/podman
+ln -sf /usr/bin/aardvark-dns /usr/lib/podman/aardvark-dns
+POSTINST
+        cat > "$aard_prerm" <<'PRERM'
+#!/bin/sh
+set -e
+rm -f /usr/lib/podman/aardvark-dns
+PRERM
+        chmod 755 "$aard_postinst" "$aard_prerm"
+
+        # Real shared-library deps resolved via `ldd bin/aardvark-dns` + `dpkg -S`.
+        POSTINST_SCRIPT="$aard_postinst" PRERM_SCRIPT="$aard_prerm" \
+            build_and_install_deb "aardvark-dns" "${AARDVARK_VERSION}" "$aard_stage" \
+            "libc6"
+
+        rm -f "$aard_postinst" "$aard_prerm"
         cd /
         rm -rf "$aard_dir"
-    fi
-
-    echo "==> Installing netavark and aardvark-dns to /usr/lib/podman/..."
-    sudo mkdir -p /usr/lib/podman
-    if [[ "$(/usr/lib/podman/netavark --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" != "${NETAVARK_VERSION}" ]]; then
-        sudo cp /usr/local/bin/netavark /usr/lib/podman/netavark
-    else
-        echo "==> /usr/lib/podman/netavark already ${NETAVARK_VERSION}, skipping."
-    fi
-
-    if [[ "$(/usr/lib/podman/aardvark-dns --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')" != "${AARDVARK_VERSION}" ]]; then
-        pkill -f aardvark-dns 2>/dev/null || true
-        sudo cp /usr/local/bin/aardvark-dns /usr/lib/podman/aardvark-dns
-    else
-        echo "==> /usr/lib/podman/aardvark-dns already ${AARDVARK_VERSION}, skipping."
+        echo "Aardvark-dns ${AARDVARK_VERSION} installed via apt."
     fi
 
     # ---------- crun ----------
-    if command -v crun &>/dev/null && [[ "$(crun --version | head -1 | grep -oP '\d+\.\d+(\.\d+)?')" == "${CRUN_VERSION}" ]]; then
-        echo "==> crun ${CRUN_VERSION} already present, skipping."
+    # Downloaded as a prebuilt release binary (no source build step exists
+    # upstream) — wrapped in a trivial .deb (Task 2) for the same
+    # dpkg-tracking consistency as the built components.
+    if dpkg-query -W -f='${Version}' crun 2>/dev/null | grep -qF "${CRUN_VERSION}-1"; then
+        echo "==> crun ${CRUN_VERSION} already installed via apt, skipping."
     else
-        echo "==> Installing crun ${CRUN_VERSION} from release binary..."
+        echo "==> Downloading crun ${CRUN_VERSION} release binary..."
         if ! command -v curl &>/dev/null; then
-            sudo apt install -y -qq curl
+            sudo apt-get install -y -qq curl
         fi
         local ARCH
         ARCH=$(uname -m)
@@ -235,17 +579,30 @@ prepare_for_podman_v6() {
         esac
         local CRUN_URL="https://github.com/containers/crun/releases/download/${CRUN_VERSION}/crun-${CRUN_VERSION}-linux-${BIN_ARCH}"
         echo "==> Downloading $CRUN_URL"
-        curl -fSL "$CRUN_URL" -o /tmp/crun-${CRUN_VERSION}
-        chmod +x /tmp/crun-${CRUN_VERSION}
-        sudo cp /tmp/crun-${CRUN_VERSION} /usr/local/bin/crun
-        rm -f /tmp/crun-${CRUN_VERSION}
-        echo "crun ${CRUN_VERSION} installed to /usr/local/bin/crun"
+        curl -fSL "$CRUN_URL" -o "/tmp/crun-${CRUN_VERSION}"
+        chmod +x "/tmp/crun-${CRUN_VERSION}"
+
+        echo "==> Staging crun for packaging..."
+        local crun_stage
+        crun_stage="$(mktemp -d /tmp/crun-pkg-XXXXXX)"
+        mkdir -p "$crun_stage/usr/bin"
+        cp "/tmp/crun-${CRUN_VERSION}" "$crun_stage/usr/bin/crun"
+        rm -f "/tmp/crun-${CRUN_VERSION}"
+
+        # Real shared-library deps resolved via `ldd crun` + `dpkg -S`
+        # against the downloaded binary (verify once per crun release).
+        build_and_install_deb "crun" "${CRUN_VERSION}" "$crun_stage" \
+            "libc6" "libseccomp2" "libsystemd0" "libyajl2"
+
+        echo "crun ${CRUN_VERSION} installed via apt."
     fi
 
     # ---------- conmon ----------
     # Source: https://github.com/containers/conmon/releases/tag/v2.2.1
-    if command -v conmon &>/dev/null && [[ "$(conmon --version 2>/dev/null | head -1 | grep -oP '\d+\.\d+\.\d+')" == "${CONMON_VERSION}" ]]; then
-        echo "==> conmon ${CONMON_VERSION} already present, skipping."
+    # Packaged as a .deb (Task 1) so it's apt-tracked: `dpkg -l conmon`,
+    # `apt remove conmon`, `apt-mark hold conmon` all work post-install.
+    if dpkg-query -W -f='${Version}' conmon 2>/dev/null | grep -qF "${CONMON_VERSION}-1"; then
+        echo "==> conmon ${CONMON_VERSION} already installed via apt, skipping."
     else
         echo "==> Building conmon ${CONMON_VERSION} from source..."
         local conmon_dir
@@ -254,15 +611,39 @@ prepare_for_podman_v6() {
         git clone --branch "v${CONMON_VERSION}" --depth 1 https://github.com/containers/conmon.git
         cd conmon
         make
-        sudo cp bin/conmon /usr/local/bin/conmon
-        echo "conmon ${CONMON_VERSION} installed to /usr/local/bin/conmon"
+
+        echo "==> Staging conmon for packaging..."
+        local conmon_stage
+        conmon_stage="$(mktemp -d /tmp/conmon-pkg-XXXXXX)"
+        mkdir -p "$conmon_stage/usr/bin"
+        cp bin/conmon "$conmon_stage/usr/bin/conmon"
+
+        # Real shared-library deps for conmon on Ubuntu 26.04, resolved
+        # once via `ldd bin/conmon` + `dpkg -S` (Task 1 verification step).
+        build_and_install_deb "conmon" "${CONMON_VERSION}" "$conmon_stage" \
+            "libc6" "libglib2.0-0"
+
         cd /
         rm -rf "$conmon_dir"
+        echo "conmon ${CONMON_VERSION} installed via apt."
     fi
 
     # ---------- fuse-overlayfs ----------
     # Fallback storage driver only — inactive unless native rootless overlay
     # is unavailable. Source: https://github.com/containers/fuse-overlayfs/releases/tag/v1.17
+    #
+    # Deliberately NOT packaged as a .deb, unlike the other components.
+    # Ubuntu's repo already ships a `fuse-overlayfs` package that owns
+    # /usr/bin/fuse-overlayfs in dpkg's database; installing our own .deb
+    # under the same name creates a same-path ownership conflict apt
+    # won't resolve cleanly (confirmed in testing — apt gets stuck even
+    # when the existing install came from an earlier run of this script).
+    # Since this is a rarely-invoked fallback most people never touch,
+    # it's not worth fighting dpkg over: build it and drop the binary
+    # straight into /usr/local/bin, which sits ahead of /usr/bin in
+    # $PATH/secure_path, so ours is found first without touching the
+    # file dpkg thinks it owns. Presence/version is checked directly
+    # against the binary (not dpkg-query) for the same reason.
     if command -v fuse-overlayfs &>/dev/null && [[ "$(fuse-overlayfs --version 2>&1 | grep -oP '^fuse-overlayfs: version \K\d+\.\d+')" == "${FUSE_OVERLAYFS_VERSION}" ]]; then
         echo "==> fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} already present, skipping."
     else
@@ -275,12 +656,12 @@ prepare_for_podman_v6() {
         sh autogen.sh
         ./configure
         make
-        sudo cp fuse-overlayfs /usr/local/bin/fuse-overlayfs
-        echo "fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} installed to /usr/local/bin/fuse-overlayfs"
+        sudo install -m 755 fuse-overlayfs /usr/local/bin/fuse-overlayfs
+        echo "fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} installed to /usr/local/bin/fuse-overlayfs (not apt-tracked, by design)."
         cd /
         rm -rf "$fuseov_dir"
     fi
-    
+
     echo "==> Verifying:"
     /usr/lib/podman/netavark --version
     /usr/lib/podman/aardvark-dns --version
@@ -288,35 +669,46 @@ prepare_for_podman_v6() {
     conmon --version | head -1
     fuse-overlayfs --version 2>&1 | grep '^fuse-overlayfs: version'
 
+
     # ---------- Backup existing config for safety ----------
     BACKUP_NAME=""
     if [[ -f /etc/containers/storage.conf ]]; then
         BACKUP_NAME="/tmp/podman-config-backup-$(date +%Y%m%d-%H%M%S)"
         echo "==> Backing up existing configs to $BACKUP_NAME"
-        sudo mkdir -p "$BACKUP_NAME"
-        sudo cp /etc/containers/storage.conf "$BACKUP_NAME/" 2>/dev/null || true
-        sudo cp /etc/containers/containers.conf "$BACKUP_NAME/" 2>/dev/null || true
+        # No sudo needed: /etc/containers/*.conf are normally world-readable
+        # (only writing into /etc/containers needs elevation), and /tmp is
+        # already writable by the current user. Using sudo here would make
+        # the backup root-owned, requiring sudo again just to inspect it.
+        mkdir -p "$BACKUP_NAME"
+        cp /etc/containers/storage.conf "$BACKUP_NAME/" 2>/dev/null || true
+        cp /etc/containers/containers.conf "$BACKUP_NAME/" 2>/dev/null || true
         echo "    (If you use a custom graphroot, look here after upgrade!)"
     fi
 
-    # ---------- Config files ----------
+    # ---------- Config files (containers-common) ----------
+    sudo apt-get remove -y golang-github-containers-image golang-github-containers-common || true
+    # Packaged as a config-only .deb (Task 5) — no binary, no build step.
+    # Staged directly and handed to build_and_install_deb so it still gets
+    # dpkg tracking (`dpkg -L containers-common`, `apt remove
+    # containers-common`) even though there's nothing to compile.
     echo "==> Setting up containers configuration for rootless Podman v6..."
-    sudo mkdir -p /etc/containers /usr/share/containers /usr/share/containers/seccomp
-
+    local common_stage
+    common_stage="$(mktemp -d /tmp/containers-common-pkg-XXXXXX)"
+    mkdir -p "$common_stage/etc/containers" "$common_stage/usr/share/containers/seccomp"
 
     COMMON_TMPDIR="/tmp/container-libs-common"
     rm -rf "${COMMON_TMPDIR}"
     if git clone --depth 1 --branch "${COMMON_TAG}" https://github.com/podman-container-tools/container-libs.git "${COMMON_TMPDIR}"; then
-            sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /etc/containers/containers.conf || echo "Warning: containers.conf copy failed; continuing build..." >&2
-        sudo cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" /usr/share/containers/containers.conf || echo "Warning: containers.conf copy failed; continuing build..." >&2
-        sudo cp "${COMMON_TMPDIR}/image/registries.conf" /etc/containers/registries.conf || echo "Warning: registries.conf copy failed; continuing build..." >&2
-        sudo cp "${COMMON_TMPDIR}/storage/storage.conf" /etc/containers/storage.conf || echo "Warning: storage.conf copy failed; continuing build..." >&2
-        sudo cp "${COMMON_TMPDIR}/common/pkg/seccomp/"*.json /usr/share/containers/seccomp/ 2>/dev/null || true
+        cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" "$common_stage/etc/containers/containers.conf" || echo "Warning: containers.conf copy failed; continuing build..." >&2
+        cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" "$common_stage/usr/share/containers/containers.conf" || echo "Warning: containers.conf copy failed; continuing build..." >&2
+        cp "${COMMON_TMPDIR}/image/registries.conf" "$common_stage/etc/containers/registries.conf" || echo "Warning: registries.conf copy failed; continuing build..." >&2
+        cp "${COMMON_TMPDIR}/storage/storage.conf" "$common_stage/etc/containers/storage.conf" || echo "Warning: storage.conf copy failed; continuing build..." >&2
+        cp "${COMMON_TMPDIR}/common/pkg/seccomp/"*.json "$common_stage/usr/share/containers/seccomp/" 2>/dev/null || true
         rm -rf "${COMMON_TMPDIR}"
-        echo "Installed official containers-common ${COMMON_TAG} configs."
+        echo "Staged official containers-common ${COMMON_TAG} configs."
     else
         echo "Tag ${COMMON_TAG} not found; creating minimal rootless config."
-        cat <<'CFG' | sudo tee /etc/containers/containers.conf > /dev/null
+        cat <<'CFG' > "$common_stage/etc/containers/containers.conf"
 [engine]
 events_logger = "journald"
 runtime = "crun"
@@ -324,15 +716,20 @@ runtime = "crun"
 network_backend = "netavark"
 CFG
         USER_ID=$(id -u)
-        cat <<STOCFG | sudo tee /etc/containers/storage.conf > /dev/null
+        cat <<STOCFG > "$common_stage/etc/containers/storage.conf"
 [storage]
 driver = "overlay"
 runroot = "/run/user/${USER_ID}/containers"
 graphroot = "/home/${USER}/.local/share/containers/storage"
 STOCFG
-        sudo cp /etc/containers/containers.conf /usr/share/containers/containers.conf
-        echo "Minimal rootless config created."
+        cp "$common_stage/etc/containers/containers.conf" "$common_stage/usr/share/containers/containers.conf"
+        echo "Staged minimal rootless config."
     fi
+
+    # Config-only package: pull the COMMON_TAG version portion for the
+    # .deb version string (e.g. "common/v0.68.1" -> "0.68.1").
+    local common_version="${COMMON_TAG##*/v}"
+    build_and_install_deb "containers-common" "${common_version}" "$common_stage"
 
     echo ""
     echo "New versions:"
@@ -350,58 +747,79 @@ STOCFG
     echo "=============================================="
 }
 
-if [[ "$MAJOR_TARGET" -ge 6 ]]; then
-    prepare_for_podman_v6
-fi
+prepare_for_podman_v6
 
-# ---------- Check runtime dependencies for Podman v6+ (binary versions) ----------
-if [[ "$MAJOR_TARGET" -ge 6 ]]; then
-    echo "==> Checking required runtime dependencies for Podman v6..."
-    MISSING_DEPS=()
+# ---------- Check runtime dependencies (netavark/aardvark-dns versions) ----------
+# No longer gated on MAJOR_TARGET — deps always build to latest regardless
+# of which podman tag is being installed (plan.md decision #1).
+echo "==> Checking required runtime dependencies..."
+MISSING_DEPS=()
 
-    check_binary_version() {
-        local cmd="$1" min_ver="$2" label="$3"
-        if ! command -v "$cmd" &>/dev/null; then
-            MISSING_DEPS+=("$label binary not found in PATH (looked for $cmd)")
-            return
-        fi
-        local ver
-        ver=$("$cmd" --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
-        if [[ -z "$ver" ]]; then
-            MISSING_DEPS+=("$label: cannot determine version from $cmd --version")
-        elif [[ "$(printf '%s\n%s\n' "$min_ver" "$ver" | sort -V | head -n1)" != "$min_ver" ]]; then
-            MISSING_DEPS+=("$label >= $min_ver (found $ver)")
-        fi
-    }
-
-    check_binary_version /usr/lib/podman/netavark "${NETAVARK_VERSION}" "netavark"
-    check_binary_version /usr/lib/podman/aardvark-dns "${AARDVARK_VERSION}" "aardvark-dns"
-
-    if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
-        echo "ERROR: Missing required runtime dependencies for Podman v6:"
-        for dep in "${MISSING_DEPS[@]}"; do echo "  - $dep"; done
-        echo ""
-        echo "The preparation step should have installed them – something went wrong."
-        exit 1
+check_binary_version() {
+    local cmd="$1" min_ver="$2" label="$3"
+    if ! command -v "$cmd" &>/dev/null; then
+        MISSING_DEPS+=("$label binary not found in PATH (looked for $cmd)")
+        return
     fi
-    echo "==> All runtime dependencies are satisfied."
-fi
+    local ver
+    ver=$("$cmd" --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+    if [[ -z "$ver" ]]; then
+        MISSING_DEPS+=("$label: cannot determine version from $cmd --version")
+    elif [[ "$(printf '%s\n%s\n' "$min_ver" "$ver" | sort -V | head -n1)" != "$min_ver" ]]; then
+        MISSING_DEPS+=("$label >= $min_ver (found $ver)")
+    fi
+}
 
-# ---------- Upgrade logic ----------
-if ! command -v podman &>/dev/null; then
-    echo "ERROR: 'podman' not found. Install it first with 'sudo apt install podman'."
+check_binary_version /usr/lib/podman/netavark "${NETAVARK_VERSION}" "netavark"
+check_binary_version /usr/lib/podman/aardvark-dns "${AARDVARK_VERSION}" "aardvark-dns"
+
+if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
+    echo "ERROR: Missing required runtime dependencies:"
+    for dep in "${MISSING_DEPS[@]}"; do echo "  - $dep"; done
+    echo ""
+    echo "The preparation step should have installed them – something went wrong."
     exit 1
 fi
-CURRENT_VERSION="$(podman --version | grep -oP '\d+\.\d+\.\d+')"
-echo "==> Current Podman version: $CURRENT_VERSION"
-if [[ "$CURRENT_VERSION" == "$TAG_VERSION" ]]; then echo "==> Already at $TAG_VERSION. Nothing to do."; exit 0; fi
-if [[ "$(printf '%s\n%s\n' "$TAG_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" == "$TAG_VERSION" ]]; then echo "ERROR: Refusing to downgrade."; exit 1; fi
-echo "==> Will upgrade from $CURRENT_VERSION to $TAG_VERSION."
-echo "==> Saving current state..."
-if ! podman ps --filter status=running --format "{{.Names}}" > ~/podman-state-backup.txt 2>/dev/null; then
-    echo "WARNING: Could not save container state. Skipping restart."
-    rm -f ~/podman-state-backup.txt; STATE_CAPTURED=false
+echo "==> All runtime dependencies are satisfied."
+
+# ---------- Upgrade logic ----------
+if command -v podman &>/dev/null; then
+    CURRENT_VERSION="$(podman --version | grep -oP '\d+\.\d+\.\d+')"
+    echo "==> Current Podman version: $CURRENT_VERSION"
+    if [[ "$CURRENT_VERSION" == "$TAG_VERSION" ]]; then echo "==> Already at $TAG_VERSION. Nothing to do."; exit 0; fi
+    if [[ "$(printf '%s\n%s\n' "$TAG_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" == "$TAG_VERSION" ]]; then echo "ERROR: Refusing to downgrade."; exit 1; fi
+    echo "==> Will upgrade from $CURRENT_VERSION to $TAG_VERSION."
 else
+    echo "==> No existing Podman installation detected. Proceeding with clean source build."
+fi
+echo "==> Saving current state..."
+
+QUADLET_UNITS_FILE="$(mktemp /tmp/podman-quadlet-units.XXXXXX)"
+discover_active_quadlet_units > "$QUADLET_UNITS_FILE"
+QUADLET_UNIT_COUNT="$(wc -l < "$QUADLET_UNITS_FILE")"
+if [[ "$QUADLET_UNIT_COUNT" -gt 0 ]]; then
+    echo "    Found $QUADLET_UNIT_COUNT active Quadlet-managed service(s) under ~/.config/containers/systemd:"
+    cut -f1 "$QUADLET_UNITS_FILE" | sed 's/^/      - /'
+else
+    echo "    No active Quadlet-managed services found under ~/.config/containers/systemd."
+fi
+
+# Generic podman-ps-based backup, for containers with no corresponding
+# active Quadlet unit. Anything already accounted for above is
+# excluded here so it's only ever restarted the one correct way.
+mapfile -t ALL_RUNNING_CONTAINERS < <(podman ps --filter status=running --format "{{.Names}}" 2>/dev/null || true)
+: > ~/podman-state-backup.txt
+if [[ ${#ALL_RUNNING_CONTAINERS[@]} -eq 0 ]]; then
+    echo "WARNING: Could not enumerate running containers, or none are running. Skipping generic restart."
+    STATE_CAPTURED=false
+else
+    QUADLET_CONTAINER_NAMES="$(cut -f2 "$QUADLET_UNITS_FILE")"
+    for c_name in "${ALL_RUNNING_CONTAINERS[@]}"; do
+        if [[ -n "$QUADLET_CONTAINER_NAMES" ]] && grep -qxF "$c_name" <<< "$QUADLET_CONTAINER_NAMES"; then
+            continue
+        fi
+        echo "$c_name" >> ~/podman-state-backup.txt
+    done
     STATE_CAPTURED=true
 fi
 
@@ -411,20 +829,21 @@ echo "  Installing build dependencies via apt. This may take"
 echo "  a few minutes with little visible output. Please wait..."
 echo "=============================================================="
 
-if [[ "$MAJOR_TARGET" -ge 6 ]]; then
-    echo "  NOTE: Podman v6 requires Netavark/Aardvark v2.0.0+ and containers-common v0.68.0+."
-fi
-# netavark and aardvark-dns are intentionally excluded here —
-# for Podman v6, versions 2.0.0+ are required and were installed
-# by the preparation step above.
-# crun, conmon, and fuse-overlayfs ARE included here even for v6 targets:
-# apt's versions are superseded by /usr/local/bin (built in
-# prepare_for_podman_v6, which precedes apt's /usr/bin copies in PATH)
-# — but they're still required as-is for v5 targets, where
-# prepare_for_podman_v6() never runs.
-sudo apt update
-sudo apt install -y golang-github-containers-common git golang-go make gcc pkg-config libgpgme-dev libassuan-dev libseccomp-dev libdevmapper-dev libglib2.0-dev libsystemd-dev libselinux1-dev libapparmor-dev libbtrfs-dev btrfs-progs conmon crun fuse-overlayfs passt nftables uidmap libsubid-dev
-# Go version check
+# conmon, crun, netavark, and aardvark-dns are intentionally excluded
+# from this apt install — they're already installed as our own .debs by
+# prepare_for_podman_v6 above, and pulling the stock apt versions here
+# would just fight with those (same package names, different origin).
+# fuse-overlayfs is excluded too, but for a different reason: it was
+# built and dropped into /usr/local/bin directly (not apt-installed at
+# all — see the fuse-overlayfs section above), so there's no apt
+# package of ours to conflict with; the stock apt fuse-overlayfs stays
+# installed at /usr/bin the whole time and is simply shadowed by PATH
+# precedence.
+sudo apt-get install -y git golang-go make gcc pkg-config libgpgme-dev libassuan-dev libseccomp-dev libdevmapper-dev libglib2.0-dev libsystemd-dev libselinux1-dev libapparmor-dev libbtrfs-dev btrfs-progs passt nftables uidmap libsubid-dev
+
+# Go version check — this genuinely differs by podman major version
+# (v6 requires a newer Go toolchain), so this branch stays even though
+# the "deps always latest" rule dropped the rest of the v5/v6 split.
 GO_VERSION=$(go version 2>/dev/null | awk '{print $3}' | sed 's/go//' || true)
 if [[ -z "$GO_VERSION" ]] || [[ "$(printf '%s\n%s\n' "$MIN_GO_VERSION" "$GO_VERSION" | sort -V | head -n1)" != "$MIN_GO_VERSION" ]]; then
     echo "ERROR: Podman v${MAJOR_TARGET} requires Go ${MIN_GO_VERSION} or higher. You have ${GO_VERSION:-none}."
@@ -432,52 +851,82 @@ if [[ -z "$GO_VERSION" ]] || [[ "$(printf '%s\n%s\n' "$MIN_GO_VERSION" "$GO_VERS
 fi
 
 WORKDIR="$(mktemp -d /tmp/podman-build.XXXXXX)"
-
-git clone "$REPO_URL" "$WORKDIR"
 cd "$WORKDIR"
-git -c advice.detachedHead=false checkout "$TAG"
+git clone -c advice.detachedHead=false "$REPO_URL" . || true
+git checkout "$TAG"
 
 echo "==> Building Podman from source using all available cores..."
 make BUILDTAGS="selinux seccomp systemd exclude_graphdriver_devicemapper" -j"$(nproc)"
 
-echo "==> Backing up current binaries..."
-BACKUP_DIR="$(mktemp -d /tmp/podman-bin-backup.XXXXXX)"
-mkdir -p "$BACKUP_DIR"/{bin,libexec,share}
-[[ -f /usr/local/bin/podman ]] && cp -a /usr/local/bin/podman* "$BACKUP_DIR/bin/" 2>/dev/null || true
-[[ -d /usr/local/libexec/podman ]] && cp -a /usr/local/libexec/podman "$BACKUP_DIR/libexec/" 2>/dev/null || true
-[[ -d /usr/local/share/man/man1 ]] && cp -a /usr/local/share/man/man1/podman* "$BACKUP_DIR/share/" 2>/dev/null || true
-    
 echo "==> Stopping all containers and Podman services safely..."
+if [[ "$QUADLET_UNIT_COUNT" -gt 0 ]]; then
+    echo "    Stopping Quadlet-managed services via systemctl (not podman),"
+    echo "    so systemd's own view of unit state stays accurate..."
+    while IFS=$'\t' read -r unit_name _container_name; do
+        [[ -z "$unit_name" ]] && continue
+        echo "      systemctl --user stop $unit_name"
+        systemctl --user stop "$unit_name" 2>/dev/null || true
+    done < "$QUADLET_UNITS_FILE"
+fi
 podman stop --all 2>/dev/null || true
 systemctl --user stop podman.socket podman.service 2>/dev/null || true
 
-echo "==> Installing to /usr/local..."
-sudo make install PREFIX=/usr/local
-echo "==> Disabling and masking system-level Podman services (rootless Quadlet setup only)..."
-sudo systemctl disable --now \
+echo "==> Staging podman for packaging..."
+PODMAN_STAGE="$(mktemp -d /tmp/podman-pkg-XXXXXX)"
+make DESTDIR="$PODMAN_STAGE" PREFIX=/usr install
+
+PODMAN_POSTINST="$(mktemp /tmp/podman-postinst-XXXXXX.sh)"
+PODMAN_PRERM="$(mktemp /tmp/podman-prerm-XXXXXX.sh)"
+cat > "$PODMAN_POSTINST" <<'POSTINST'
+#!/bin/sh
+set -e
+# Masking prevents systemd preset processing from re-enabling these on
+# future package upgrades — rootless Quadlet setup only, user-level
+# Quadlet services are unaffected.
+systemctl disable --now \
     podman.service podman.socket \
     podman-auto-update.service podman-auto-update.timer \
     podman-clean-transient.service podman-restart.service 2>/dev/null || true
-sudo systemctl mask \
+systemctl mask \
     podman.service podman.socket \
     podman-auto-update.service podman-auto-update.timer \
     podman-clean-transient.service podman-restart.service 2>/dev/null || true
-sudo systemctl daemon-reload
+systemctl daemon-reload
+POSTINST
+cat > "$PODMAN_PRERM" <<'PRERM'
+#!/bin/sh
+set -e
+# Unmask on removal so a subsequent `apt install podman` (stock repo
+# package) isn't left with masked services.
+systemctl unmask \
+    podman.service podman.socket \
+    podman-auto-update.service podman-auto-update.timer \
+    podman-clean-transient.service podman-restart.service 2>/dev/null || true
+systemctl daemon-reload
+PRERM
+chmod 755 "$PODMAN_POSTINST" "$PODMAN_PRERM"
+
+# Real shared-library deps resolved via `ldd /usr/bin/podman` + `dpkg -S`
+# against the built binary (verify once, re-check only if linked libs
+# change in a future release).
+POSTINST_SCRIPT="$PODMAN_POSTINST" PRERM_SCRIPT="$PODMAN_PRERM" \
+    build_and_install_deb "podman" "${TAG_VERSION}" "$PODMAN_STAGE" \
+    "libgpgme11 | libgpgme45" "libassuan0 | libassuan3 | libassuan9" "libseccomp2" "libdevmapper1.02.1" \
+    "libglib2.0-0" "libsystemd0" "libselinux1" "libapparmor1" "libbtrfs0"
+
+rm -f "$PODMAN_POSTINST" "$PODMAN_PRERM"
 echo "==> System-level Podman services masked. User-level Quadlet services unaffected."
 echo "    (masking prevents systemd preset processing from re-enabling them on future upgrades)"
-BACKUP_DIR="" # Success, clear backup
 
-# ---------- Use absolute path to verify the new binary ----------
-INSTALLED_PODMAN="/usr/local/bin/podman"
+# ---------- Verify the installed binary ----------
+INSTALLED_PODMAN="/usr/bin/podman"
 
-# First, do a quick version check
 INSTALLED_VERSION="$("$INSTALLED_PODMAN" --version 2>/dev/null | awk '{print $3}' || echo "")"
 if [[ "$INSTALLED_VERSION" != "$TAG_VERSION" ]]; then
     echo "ERROR: Installation verification failed. $INSTALLED_PODMAN reports version ${INSTALLED_VERSION:-unknown}, expected $TAG_VERSION."
     false
 fi
 
-# Now test podman info with debug output on failure
 echo "==> Verifying new Podman binary..."
 if ! "$INSTALLED_PODMAN" info &>/dev/null; then
     echo "ERROR: New podman binary fails to run 'podman info'. Debug output:"
@@ -486,6 +935,10 @@ if ! "$INSTALLED_PODMAN" info &>/dev/null; then
 fi
 
 echo "==> Running database migration..."
+# This branch is a genuine podman version-behavior difference (the
+# --migrate-db flag itself changed between v5 and v6), not a
+# dependency-freshness question — it stays even though the general
+# "deps always latest" rule removed the rest of the v5/v6 split.
 if [[ "$MAJOR_TARGET" -lt 6 ]]; then
     "$INSTALLED_PODMAN" system migrate --migrate-db
 else
@@ -498,9 +951,19 @@ systemctl --user daemon-reload
 if systemctl --user is-enabled podman.socket &>/dev/null; then
     systemctl --user restart podman.socket 2>/dev/null || true
 fi
-    
+
+if [[ "$QUADLET_UNIT_COUNT" -gt 0 ]]; then
+    echo "==> Restarting previously active Quadlet-managed services via systemctl..."
+    while IFS=$'\t' read -r unit_name _container_name; do
+        [[ -z "$unit_name" ]] && continue
+        echo "      systemctl --user start $unit_name"
+        systemctl --user start "$unit_name" 2>/dev/null || true
+    done < "$QUADLET_UNITS_FILE"
+fi
+rm -f "$QUADLET_UNITS_FILE"
+
 if [[ "${STATE_CAPTURED:-false}" == true && -s ~/podman-state-backup.txt ]]; then
-    echo "==> Restarting previously running containers..."
+    echo "==> Restarting previously running (non-Quadlet) containers..."
     while read -r container; do
         [[ -n "$container" ]] && "$INSTALLED_PODMAN" start "$container" 2>/dev/null || true
     done < ~/podman-state-backup.txt
@@ -510,18 +973,6 @@ fi
 hash -r
 
 rm -rf "$WORKDIR"
-
-# ---------- AppArmor Fix for /usr/local/bin ----------
-echo "==> Patching AppArmor profile to allow rootless Podman execution from /usr/local/bin..."
-if [[ -f /etc/apparmor.d/podman ]]; then
-    # This sed command is safe to run multiple times; it will only match if the unpatched string exists.
-    sudo sed -Ei 's!^profile podman /usr/bin/podman!profile podman /usr/{bin,local/bin}/podman!' /etc/apparmor.d/podman
-    sudo apparmor_parser -r /etc/apparmor.d/podman 2>/dev/null || true
-    echo "==> AppArmor profile updated and reloaded."
-else
-    echo "==> No default AppArmor profile found for Podman. Skipping patch."
-fi
-# -----------------------------------------------------
 
 echo ""
 echo "=============================================="
@@ -537,8 +988,6 @@ echo "     them manually. For root Quadlet containers, use:"
 echo "       sudo systemctl restart \$(find /etc/containers/systemd -name '*.container' | xargs -r -n1 basename | sed 's/\.container\$//')"
 echo "     Also verify the podman socket:"
 echo "       systemctl --user status podman.socket"
-echo "  ** If your terminal still shows the old version,"
-echo "     run 'hash -r' or open a new terminal. **"
 echo "  ** Podman v6.x.x note: if you used 'podman quadlet install',"
 echo "     Quadlet files may now live in subdirectories under"
 echo "     ~/.config/containers/systemd/. Check manually if units"
@@ -548,4 +997,11 @@ echo "     if networks fail in 6.x.x, verify versions with:"
 echo "       /usr/lib/podman/netavark --version"
 echo "       /usr/lib/podman/aardvark-dns --version"
 echo "     netavark should report ${NETAVARK_VERSION}, aardvark-dns should report ${AARDVARK_VERSION}"
+echo "  ** All components except fuse-overlayfs are apt-managed:"
+echo "     'dpkg -l | grep -E \"podman|conmon|crun|netavark|aardvark|containers-common\"'"
+echo "     shows what's installed, and each is held via apt-mark to"
+echo "     prevent an accidental 'apt upgrade' from overwriting it."
+echo "     fuse-overlayfs lives in /usr/local/bin (ahead of /usr/bin in"
+echo "     \$PATH) and isn't apt-tracked by design — check it with"
+echo "     'fuse-overlayfs --version' directly."
 echo "=============================================="
