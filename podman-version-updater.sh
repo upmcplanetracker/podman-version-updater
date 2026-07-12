@@ -11,8 +11,6 @@ CRUN_VERSION="1.28"
 CONMON_VERSION="2.2.1"
 FUSE_OVERLAYFS_VERSION="1.17"
 # ============================================================
-# run update once
-sudo apt-get update -qq
 
 # ============================================================
 # Packaging scaffolding (Task 0)
@@ -63,15 +61,27 @@ build_and_install_deb() {
 
     ensure_fpm_installed
 
-    local deb_path
-    deb_path="$(mktemp -u /tmp/${component}-build-XXXXXX.deb)"
+    # mktemp -d creates the directory atomically with mode 700, owned
+    # exclusively by us — placing the .deb inside it avoids the TOCTOU
+    # race of `mktemp -u` handing back a name nothing has actually
+    # claimed yet, which another process could grab first.
+    local deb_dir deb_path
+    deb_dir="$(mktemp -d "/tmp/${component}-build-XXXXXX")"
+    deb_path="${deb_dir}/${component}.deb"
+
+    # Detect the native architecture rather than assuming amd64 — the
+    # OS/version guardrail earlier only checks $ID/$VERSION_ID, not
+    # architecture, so an arm64 Ubuntu host would otherwise sail past
+    # that check and build .debs that can never install.
+    local PKG_ARCH
+    PKG_ARCH="$(dpkg --print-architecture)"
 
     local fpm_args=(
         -s dir -t deb
         -n "$component"
         -v "$version"
         --iteration 1
-        --architecture amd64
+        --architecture "$PKG_ARCH"
         --deb-no-default-config-files
         -p "$deb_path"
         -C "$stage_dir"
@@ -89,7 +99,7 @@ build_and_install_deb() {
         fpm_args+=(--before-remove "$PRERM_SCRIPT")
     fi
 
-    echo "==> Packaging ${component} ${version} as .deb..."
+    echo "==> Packaging ${component} ${version} as .deb (${PKG_ARCH})..."
     fpm "${fpm_args[@]}" .
 
     echo "==> Installing ${component} ${version} via apt..."
@@ -99,7 +109,7 @@ build_and_install_deb() {
     sudo apt-mark hold "$component" >/dev/null
 
     echo "==> Cleaning up staging artifacts for ${component}..."
-    rm -f "$deb_path"
+    rm -rf "$deb_dir"
     rm -rf "$stage_dir"
 }
 
@@ -152,14 +162,20 @@ normalize_podman_version() {
 # fetch_podman_tags_cached
 #
 # Populates PODMAN_TAGS_CACHE on first call, reused by subsequent calls
-# within the same script run (stays well within the unauthenticated
-# 60 req/hr GitHub API limit). Deliberately assigns to a local variable
-# first and only commits to the cache after confirming the fetch
-# actually succeeded AND returned at least one well-formed tag line —
-# a mid-transfer network drop can make `curl | grep` exit non-zero
-# while bash has still captured partial output into the assignment
-# target, so checking the exit code alone isn't enough to avoid
-# caching garbage that later calls would then trust without retrying.
+# within the same script run. Paginates through GitHub's tags API
+# (capped at 100 per page — a hard GitHub limit) since containers/podman
+# has well over 100 tags across its full release history; a single
+# unpaginated request would only see the most recent ~100 and silently
+# report older tags as nonexistent. Stops at max_pages as a safety net
+# against an unexpected API response shape looping forever, and stays
+# well within the unauthenticated 60 req/hr GitHub API limit for any
+# realistic tag count. Deliberately assigns to a local variable first
+# and only commits to the cache after confirming the fetch actually
+# succeeded AND returned at least one well-formed tag line — a
+# mid-transfer network drop can make `curl | grep` exit non-zero while
+# bash has still captured partial output into the assignment target,
+# so checking the exit code alone isn't enough to avoid caching garbage
+# that later calls would then trust without retrying.
 PODMAN_TAGS_CACHE=""
 fetch_podman_tags_cached() {
     if [[ -n "$PODMAN_TAGS_CACHE" ]]; then
@@ -167,26 +183,49 @@ fetch_podman_tags_cached() {
     fi
 
     echo "==> Fetching containers/podman tag list from GitHub..." >&2
-    local fetched fetch_status
-    # Wrapped in an `if` rather than a bare assignment: with `set -e`
-    # active script-wide, a bare `fetched="$(...)"` that fails would
-    # abort the whole script immediately, before we ever get to check
-    # $fetch_status below. Commands in an if-condition are exempt from
-    # -e, which is exactly what lets us handle the failure gracefully
-    # here instead.
-    if fetched="$(curl -fsSL "https://api.github.com/repos/containers/podman/tags?per_page=100" \
-        | grep -oP '"name":\s*"\K[^"]+')"; then
-        fetch_status=0
-    else
-        fetch_status=$?
-    fi
 
-    if [[ $fetch_status -ne 0 ]] || [[ -z "$fetched" ]]; then
+    local all_tags="" page fetched fetch_status page_tag_count
+    local -r max_pages=10   # 10 x 100 = 1000 tags, comfortably beyond podman's actual count
+
+    for ((page = 1; page <= max_pages; page++)); do
+        # Wrapped in an `if` rather than a bare assignment: with `set -e`
+        # active script-wide, a bare `fetched="$(...)"` that fails would
+        # abort the whole script immediately, before we ever get to
+        # check $fetch_status below. Commands in an if-condition are
+        # exempt from -e, which is exactly what lets us handle the
+        # failure gracefully here instead.
+        if fetched="$(curl -fsSL "https://api.github.com/repos/containers/podman/tags?per_page=100&page=${page}" \
+            | grep -oP '"name":\s*"\K[^"]+')"; then
+            fetch_status=0
+        else
+            fetch_status=$?
+        fi
+
+        if [[ $fetch_status -ne 0 ]]; then
+            echo "ERROR: Failed to fetch tags from GitHub API (page ${page})." >&2
+            return 1
+        fi
+
+        # Empty page means we've reached the end of the tag list.
+        if [[ -z "$fetched" ]]; then
+            break
+        fi
+
+        page_tag_count="$(wc -l <<< "$fetched")"
+        all_tags+="${fetched}"$'\n'
+
+        # Fewer than 100 tags on this page also means it was the last one.
+        if [[ "$page_tag_count" -lt 100 ]]; then
+            break
+        fi
+    done
+
+    if [[ -z "$all_tags" ]]; then
         echo "ERROR: Failed to fetch tags from GitHub API (empty or partial response)." >&2
         return 1
     fi
 
-    PODMAN_TAGS_CACHE="$fetched"
+    PODMAN_TAGS_CACHE="$all_tags"
     return 0
 }
 
@@ -362,7 +401,7 @@ if [[ "$1" == "--rollback-to-stock" ]]; then
     done
 
     echo "==> Reinstalling from Ubuntu's repo..."
-    sudo apt-get install -y --reinstall podman conmon crun
+    sudo apt-get install -y --reinstall "${STOCK_COMPONENTS[@]}"
 
     echo "==> Removing custom fuse-overlayfs build from /usr/local/bin..."
     # Not dpkg-tracked, so a stock reinstall alone wouldn't take effect —
@@ -441,6 +480,25 @@ if [[ "$ID" != "ubuntu" ]] || ! [[ "$VERSION_ID" == "26.04" || "$VERSION_ID" == 
     exit 1
 fi
 echo "==> OS Check Passed: $PRETTY_NAME"
+# ----------------------------------------------
+
+# ---------- One-time apt update + catatonit ----------
+# Runs once, here, after usage/tag/OS validation has already passed —
+# not at the very top of the script — so a typo'd version, --help, or
+# the wrong OS doesn't trigger a sudo prompt and a full apt update for
+# nothing.
+echo "==> Running one-time apt update..."
+sudo apt-get update -qq
+
+# catatonit is normally pulled in automatically as a dependency of the
+# stock apt "podman" package. This script never apt-installs stock
+# podman — it always builds from source — so a machine starting with
+# NO podman installed at all would otherwise end up missing catatonit
+# entirely, and without it podman's --init handling breaks. Install it
+# directly here so a from-scratch run behaves exactly like a normal
+# apt-installed one, regardless of whether podman was present before.
+echo "==> Ensuring catatonit is installed..."
+sudo apt-get install -y catatonit
 # ----------------------------------------------
 
 # ---------- Podman v6+ preparation (Netavark, Aardvark, crun, configs) ----------
@@ -534,10 +592,20 @@ PRERM
         # and kills the apt install that's currently running this very
         # script, aborting the install mid-flight. `-x` only matches the
         # actual aardvark-dns binary's process name and can't hit apt.
+        #
+        # ALSO scope the kill to the invoking user via $SUDO_USER: this
+        # postinst runs as root (apt install ran under sudo), so an
+        # unscoped `pkill -x` would match aardvark-dns processes
+        # belonging to ANY user on a multi-user box, not just the one
+        # whose podman is actually being upgraded.
         cat > "$aard_postinst" <<'POSTINST'
 #!/bin/sh
 set -e
-pkill -x aardvark-dns 2>/dev/null || true
+if [ -n "$SUDO_USER" ]; then
+    pkill -x -U "$SUDO_USER" aardvark-dns 2>/dev/null || true
+else
+    pkill -x aardvark-dns 2>/dev/null || true
+fi
 mkdir -p /usr/lib/podman
 ln -sf /usr/bin/aardvark-dns /usr/lib/podman/aardvark-dns
 POSTINST
@@ -570,7 +638,7 @@ PRERM
         if ! command -v curl &>/dev/null; then
             sudo apt-get install -y -qq curl
         fi
-        local ARCH
+        local ARCH BIN_ARCH
         ARCH=$(uname -m)
         case "$ARCH" in
             x86_64)  BIN_ARCH="amd64" ;;
@@ -671,7 +739,7 @@ PRERM
 
 
     # ---------- Backup existing config for safety ----------
-    BACKUP_NAME=""
+    local BACKUP_NAME=""
     if [[ -f /etc/containers/storage.conf ]]; then
         BACKUP_NAME="/tmp/podman-config-backup-$(date +%Y%m%d-%H%M%S)"
         echo "==> Backing up existing configs to $BACKUP_NAME"
@@ -696,7 +764,7 @@ PRERM
     common_stage="$(mktemp -d /tmp/containers-common-pkg-XXXXXX)"
     mkdir -p "$common_stage/etc/containers" "$common_stage/usr/share/containers/seccomp"
 
-    COMMON_TMPDIR="/tmp/container-libs-common"
+    local COMMON_TMPDIR="/tmp/container-libs-common"
     rm -rf "${COMMON_TMPDIR}"
     if git clone --depth 1 --branch "${COMMON_TAG}" https://github.com/podman-container-tools/container-libs.git "${COMMON_TMPDIR}"; then
         cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" "$common_stage/etc/containers/containers.conf" || echo "Warning: containers.conf copy failed; continuing build..." >&2
@@ -715,6 +783,7 @@ runtime = "crun"
 [network]
 network_backend = "netavark"
 CFG
+        local USER_ID
         USER_ID=$(id -u)
         cat <<STOCFG > "$common_stage/etc/containers/storage.conf"
 [storage]
@@ -852,7 +921,7 @@ fi
 
 WORKDIR="$(mktemp -d /tmp/podman-build.XXXXXX)"
 cd "$WORKDIR"
-git clone -c advice.detachedHead=false "$REPO_URL" . || true
+git clone "$REPO_URL" .
 git checkout "$TAG"
 
 echo "==> Building Podman from source using all available cores..."
