@@ -302,6 +302,119 @@ discover_active_quadlet_units() {
         fi
     done < <(find "$quadlet_dir" -type f \( -name '*.container' -o -name '*.pod' -o -name '*.kube' \) -print0 2>/dev/null)
 }
+
+# ============================================================
+# purge_legacy_local_install
+#
+# Cleans up remnants of the OLD script era, which used `make install
+# PREFIX=/usr/local` and manually copied network binaries into
+# /usr/local/lib/podman. That approach leaves several classes of file
+# behind that a plain `apt install`/`apt reinstall` never touches
+# (dpkg doesn't own any of them), and which silently shadow the correct
+# apt-managed equivalents:
+#
+#   - Binaries in /usr/local/bin (podman, netavark, aardvark-dns,
+#     conmon, crun, catatonit) — /usr/local/bin precedes /usr/bin in
+#     $PATH, so these get picked up over the real apt-installed ones
+#     even when dpkg reports the correct version installed.
+#   - /usr/local/lib/podman — the old manual netavark/aardvark-dns
+#     drop location; podman v6 hardcodes its network binary lookup to
+#     /usr/lib/podman/, so a stale /usr/local/lib/podman is generally
+#     inert today, but is removed anyway since it's unambiguous
+#     leftover clutter with no legitimate reason to exist.
+#   - /usr/local/libexec/podman, /usr/local/share/containers — other
+#     paths a `PREFIX=/usr/local` install tree can populate.
+#   - /usr/local/lib/systemd/{system,user}[-generators]/*podman* —
+#     THE dangerous one. Systemd's generator/unit search order checks
+#     /usr/local/lib/systemd before /usr/lib/systemd, so a stale
+#     podman-user-generator or podman.service here silently overrides
+#     the correct apt-managed unit, even on a machine that otherwise
+#     looks completely clean via `dpkg -l`. This is the exact failure
+#     mode diagnosed on pihole1/pihole2 in July 2026 — Quadlet units
+#     kept generating with ExecStart=/usr/local/bin/podman long after
+#     every package had been reinstalled from the Ubuntu archive.
+#
+# fuse-overlayfs is deliberately NOT touched here — this script installs
+# it to /usr/local/bin on purpose (see the fuse-overlayfs section in
+# prepare_for_podman_v6) to avoid a dpkg same-path ownership conflict
+# with Ubuntu's own package. Removing it here would just make the
+# next run rebuild it from scratch for no reason.
+#
+# Runs unconditionally on every invocation (upgrade, --rollback, and
+# --rollback-to-stock) since it's fully idempotent: if nothing legacy
+# is found, it's a silent no-op. Anyone still on an old PREFIX=/usr/local
+# install needs this to run automatically the first time they use this
+# version of the script, without having to know to ask for it.
+# ============================================================
+purge_legacy_local_install() {
+    echo "=============================================="
+    echo "  Checking for legacy /usr/local source-build leftovers"
+    echo "=============================================="
+
+    local found_anything=false
+
+    # ---- Legacy binaries in /usr/local/bin ----
+    # fuse-overlayfs intentionally excluded — see comment above.
+    local -a LEGACY_BIN_NAMES=(podman netavark aardvark-dns conmon crun catatonit)
+    local bin_name bin_path
+    for bin_name in "${LEGACY_BIN_NAMES[@]}"; do
+        bin_path="/usr/local/bin/${bin_name}"
+        if [[ -e "$bin_path" || -L "$bin_path" ]]; then
+            echo "  Removing legacy binary: $bin_path"
+            sudo rm -f "$bin_path"
+            found_anything=true
+        fi
+    done
+
+    # ---- Legacy PREFIX=/usr/local install-tree directories ----
+    local -a LEGACY_DIRS=(
+        /usr/local/lib/podman
+        /usr/local/libexec/podman
+        /usr/local/share/containers
+    )
+    local d
+    for d in "${LEGACY_DIRS[@]}"; do
+        if [[ -d "$d" ]]; then
+            echo "  Removing legacy directory: $d"
+            sudo rm -rf "$d"
+            found_anything=true
+        fi
+    done
+
+    # ---- Legacy systemd unit files/generators shadowing apt's units ----
+    local -a LEGACY_UNIT_FILES=()
+    while IFS= read -r -d '' f; do
+        LEGACY_UNIT_FILES+=("$f")
+    done < <(find /usr/local/lib/systemd -iname '*podman*' -print0 2>/dev/null)
+
+    if [[ ${#LEGACY_UNIT_FILES[@]} -gt 0 ]]; then
+        echo "  Removing ${#LEGACY_UNIT_FILES[@]} legacy systemd unit file(s):"
+        printf '    %s\n' "${LEGACY_UNIT_FILES[@]}"
+        sudo rm -f "${LEGACY_UNIT_FILES[@]}"
+        found_anything=true
+    fi
+
+    if [[ "$found_anything" == true ]]; then
+        echo "  Reloading systemd (system + user) to drop cached/generated units..."
+        sudo systemctl daemon-reload
+        systemctl --user daemon-reload 2>/dev/null || true
+
+        # Force Quadlet-generated units to regenerate fresh rather than
+        # keep whatever was cached from a run of the old generator.
+        local gen_dir="/run/user/$(id -u)/systemd/generator"
+        if [[ -d "$gen_dir" ]]; then
+            rm -rf "${gen_dir:?}"/*
+        fi
+        systemctl --user daemon-reload 2>/dev/null || true
+
+        hash -r
+        echo "  Legacy /usr/local leftovers cleaned up."
+    else
+        echo "  No legacy /usr/local leftovers found. Clean."
+    fi
+    echo "=============================================="
+}
+
 # ============================================================
 
 # Staging dirs created by build_and_install_deb calls are cleaned up
@@ -360,7 +473,6 @@ Usage:
   Update:            $0 <VERSION>
   Rollback:          $0 --rollback <VERSION>
   Rollback to stock:  $0 --rollback-to-stock
-  NOTE: Podman must already be installed (sudo apt install podman) before running this script.
 
   <VERSION> accepts any of:
       v6.0.1        6.0.1        601 (exactly 3 digits)
@@ -376,6 +488,8 @@ Usage:
 EOF
     exit 1
 }
+
+purge_legacy_local_install
 
 if [[ $# -lt 1 ]]; then
     usage
