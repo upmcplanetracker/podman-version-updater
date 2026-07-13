@@ -489,11 +489,11 @@ EOF
     exit 1
 }
 
-purge_legacy_local_install
-
 if [[ $# -lt 1 ]]; then
     usage
 fi
+
+purge_legacy_local_install
 
 # ---------- ROLLBACK-TO-STOCK MODE ----------
 if [[ "$1" == "--rollback-to-stock" ]]; then
