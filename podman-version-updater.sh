@@ -450,7 +450,7 @@ cleanup_on_failure() {
     echo "sequence. Since each component is only installed via apt after"
     echo "its .deb is successfully built, whatever was installed before"
     echo "this run should be untouched. Check current state with:"
-    echo "  dpkg -l | grep -E 'podman|conmon|crun|netavark|aardvark|containers-common'"
+    echo "  dpkg -l | grep -E 'podman|conmon|crun|netavark|aardvark|fuse-overlayfs-custom|containers-common'"
     echo "  (fuse-overlayfs isn't apt-tracked by design — check its version directly:"
     echo "   fuse-overlayfs --version)"
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -523,7 +523,7 @@ if [[ "$1" == "--rollback-to-stock" ]]; then
     # fuse-overlayfs isn't in this list — it was never apt-installed by
     # this script (see the fuse-overlayfs section below for why), so
     # there's no hold to release. It's handled separately just below.
-    STOCK_COMPONENTS=(podman conmon crun netavark aardvark-dns containers-common)
+    STOCK_COMPONENTS=(podman conmon crun netavark aardvark-dns fuse-overlayfs-custom containers-common)
 
     echo "==> Stopping Podman services..."
     systemctl --user stop podman.socket podman.service 2>/dev/null || true
@@ -536,13 +536,15 @@ if [[ "$1" == "--rollback-to-stock" ]]; then
     echo "==> Reinstalling from Ubuntu's repo..."
     sudo apt-get install -y --reinstall "${STOCK_COMPONENTS[@]}"
 
-    echo "==> Removing custom fuse-overlayfs build from /usr/local/bin..."
-    # Not dpkg-tracked, so a stock reinstall alone wouldn't take effect —
-    # /usr/local/bin still precedes /usr/bin in $PATH. Remove it directly
-    # so Ubuntu's own fuse-overlayfs package (still owning /usr/bin/fuse-overlayfs
-    # the whole time) is what actually gets found again.
-    sudo rm -f /usr/local/bin/fuse-overlayfs
-    sudo apt-get install -y --reinstall fuse-overlayfs 2>/dev/null || true
+    echo "==> Releasing apt-mark hold on fuse-overlayfs-custom..."
+    sudo apt-mark unhold fuse-overlayfs-custom 2>/dev/null || true
+    sudo apt-mark unhold fuse-overlayfs 2>/dev/null || true
+
+    echo "==> Removing custom fuse-overlayfs-custom package..."
+    sudo apt-get remove -y fuse-overlayfs-custom 2>/dev/null || true
+
+    echo "==> Reinstalling stock fuse-overlayfs from Ubuntu's repo..."
+    sudo apt-get install -y --reinstall fuse-overlayfs
 
     systemctl --user daemon-reload
     hash -r
@@ -830,23 +832,12 @@ PRERM
     fi
 
     # ---------- fuse-overlayfs ----------
-    # Fallback storage driver only — inactive unless native rootless overlay
-    # is unavailable. Source: https://github.com/containers/fuse-overlayfs/releases/tag/v1.17
-    #
-    # Deliberately NOT packaged as a .deb, unlike the other components.
-    # Ubuntu's repo already ships a `fuse-overlayfs` package that owns
-    # /usr/bin/fuse-overlayfs in dpkg's database; installing our own .deb
-    # under the same name creates a same-path ownership conflict apt
-    # won't resolve cleanly (confirmed in testing — apt gets stuck even
-    # when the existing install came from an earlier run of this script).
-    # Since this is a rarely-invoked fallback most people never touch,
-    # it's not worth fighting dpkg over: build it and drop the binary
-    # straight into /usr/local/bin, which sits ahead of /usr/bin in
-    # $PATH/secure_path, so ours is found first without touching the
-    # file dpkg thinks it owns. Presence/version is checked directly
-    # against the binary (not dpkg-query) for the same reason.
-    if command -v fuse-overlayfs &>/dev/null && [[ "$(fuse-overlayfs --version 2>&1 | grep -oP '^fuse-overlayfs: version \K\d+\.\d+')" == "${FUSE_OVERLAYFS_VERSION}" ]]; then
-        echo "==> fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} already present, skipping."
+    # Packaged as fuse-overlayfs-custom to avoid same-path ownership
+    # conflict with Ubuntu's stock fuse-overlayfs package. The binary
+    # still lives at /usr/bin/fuse-overlayfs; the stock package is
+    # held to prevent apt from overwriting it.
+    if dpkg-query -W -f='${Version}' fuse-overlayfs-custom 2>/dev/null | grep -qF "${FUSE_OVERLAYFS_VERSION}-1"; then
+        echo "==> fuse-overlayfs-custom ${FUSE_OVERLAYFS_VERSION} already installed via apt, skipping."
     else
         echo "==> Building fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} from source..."
         local fuseov_dir
@@ -857,10 +848,28 @@ PRERM
         sh autogen.sh
         ./configure
         make
-        sudo install -m 755 fuse-overlayfs /usr/local/bin/fuse-overlayfs
-        echo "fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} installed to /usr/local/bin/fuse-overlayfs (not apt-tracked, by design)."
+
+        echo "==> Staging fuse-overlayfs for packaging..."
+        local fuseov_stage
+        fuseov_stage="$(mktemp -d /tmp/fuse-overlayfs-pkg-XXXXXX)"
+        mkdir -p "$fuseov_stage/usr/bin"
+        cp fuse-overlayfs "$fuseov_stage/usr/bin/fuse-overlayfs"
+
+        # Hold the stock package so it never overwrites our path
+        sudo apt-mark hold fuse-overlayfs 2>/dev/null || true
+
+        build_and_install_deb "fuse-overlayfs-custom" "${FUSE_OVERLAYFS_VERSION}" "$fuseov_stage" \
+            "libc6" "libfuse3-3"
+
         cd /
         rm -rf "$fuseov_dir"
+        echo "fuse-overlayfs-custom ${FUSE_OVERLAYFS_VERSION} installed via apt."
+    fi
+
+    # Remove old /usr/local/bin fallback if present from previous runs
+    if [[ -e /usr/local/bin/fuse-overlayfs ]]; then
+        echo "==> Removing legacy /usr/local/bin/fuse-overlayfs fallback..."
+        sudo rm -f /usr/local/bin/fuse-overlayfs
     fi
 
     echo "==> Verifying:"
@@ -1232,11 +1241,9 @@ echo "     if networks fail in 6.x.x, verify versions with:"
 echo "       /usr/lib/podman/netavark --version"
 echo "       /usr/lib/podman/aardvark-dns --version"
 echo "     netavark should report ${NETAVARK_VERSION}, aardvark-dns should report ${AARDVARK_VERSION}"
-echo "  ** All components except fuse-overlayfs are apt-managed:"
-echo "     'dpkg -l | grep -E \"podman|conmon|crun|netavark|aardvark|containers-common\"'"
+echo "  ** All components are apt-managed:"
+echo "     'dpkg -l | grep -E \"podman|conmon|crun|netavark|fuse-overlayfs-custom|aardvark|containers-common\"'"
 echo "     shows what's installed, and each is held via apt-mark to"
-echo "     prevent an accidental 'apt upgrade' from overwriting it."
-echo "     fuse-overlayfs lives in /usr/local/bin (ahead of /usr/bin in"
-echo "     \$PATH) and isn't apt-tracked by design — check it with"
-echo "     'fuse-overlayfs --version' directly."
+echo "     fuse-overlayfs-custom provides /usr/bin/fuse-overlayfs;"
+echo "     the stock fuse-overlayfs package is held to prevent path conflicts."
 echo "=============================================="
