@@ -193,8 +193,6 @@ After a successful upgrade
     podman ps -a
     systemctl --user status podman.socket
 
-There's no `hash -r` step needed anymore because Podman installs to the standard `/usr/bin/podman`, the same path it was always at, so your shell's command hash never goes stale.
-
 * * *
 
 Verify your containers and networks
