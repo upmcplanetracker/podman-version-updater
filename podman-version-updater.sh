@@ -2,6 +2,25 @@
 set -Eeuo pipefail
 
 # ============================================================
+# Prevent concurrent execution — dpkg locks will deadlock and
+# temp-dir collisions can corrupt builds.
+# ============================================================
+LOCKFILE="/tmp/podman-version-updater.lock"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    echo "ERROR: Another instance is already running ($(cat <&200 2>/dev/null || echo unknown)). Exiting."
+    exit 1
+fi
+echo "$$" >&200
+
+MIN_TMP_BYTES=$((3 * 1024 * 1024 * 1024))
+TMP_AVAIL=$(df -B1 /tmp | awk 'NR==2 {print $4}')
+if [[ "$TMP_AVAIL" -lt "$MIN_TMP_BYTES" ]]; then
+    echo "WARNING: /tmp has only $(numfmt --to=iec $TMP_AVAIL) free. Builds may fail."
+    echo "         Set TMPDIR to a larger filesystem if needed."
+fi
+
+# ============================================================
 # Dependency versions – update these when new releases come out
 # ============================================================
 NETAVARK_VERSION="2.0.0"
@@ -931,6 +950,39 @@ STOCFG
 }
 
 prepare_for_podman_v6
+
+# ============================================================
+# Rootful container / system-level Quadlet warning
+# This script only handles rootless (user) containers and
+# user-level Quadlet units. Rootful state is not backed up.
+# ============================================================
+ROOTFUL_RUNNING="$(sudo podman ps --filter status=running --format '{{.Names}}' 2>/dev/null || true)"
+if [[ -n "$ROOTFUL_RUNNING" ]]; then
+    echo ""
+    echo "WARNING: Rootful containers detected (running as root):"
+    echo "$ROOTFUL_RUNNING" | sed 's/^/  /'
+    echo "These will NOT be backed up or restarted by this script."
+    echo "You must handle them manually. Continuing in 5 seconds..."
+    sleep 5
+fi
+
+ROOTFUL_UNITS=()
+while IFS= read -r -d '' f; do
+    unit_name="$(basename "$f")"
+    unit_name="${unit_name%.*}"
+    if sudo systemctl is-active --quiet "${unit_name}.service" 2>/dev/null; then
+        ROOTFUL_UNITS+=("$unit_name")
+    fi
+done < <(find /etc/containers/systemd -type f \( -name '*.container' -o -name '*.pod' -o -name '*.kube' \) -print0 2>/dev/null)
+
+if [[ ${#ROOTFUL_UNITS[@]} -gt 0 ]]; then
+    echo ""
+    echo "WARNING: Active rootful Quadlet services found:"
+    printf '  %s.service\n' "${ROOTFUL_UNITS[@]}"
+    echo "These will NOT be stopped or restarted by this script."
+    echo "Continuing in 5 seconds..."
+    sleep 5
+fi
 
 # ---------- Check runtime dependencies (netavark/aardvark-dns versions) ----------
 # No longer gated on MAJOR_TARGET — deps always build to latest regardless
