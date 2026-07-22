@@ -182,7 +182,7 @@ normalize_podman_version() {
 #
 # Populates PODMAN_TAGS_CACHE on first call, reused by subsequent calls
 # within the same script run. Paginates through GitHub's tags API
-# (capped at 100 per page — a hard GitHub limit) since containers/podman
+# (capped at 100 per page — a hard GitHub limit) since podman-container-tools/podman
 # has well over 100 tags across its full release history; a single
 # unpaginated request would only see the most recent ~100 and silently
 # report older tags as nonexistent. Stops at max_pages as a safety net
@@ -201,7 +201,7 @@ fetch_podman_tags_cached() {
         return 0
     fi
 
-    echo "==> Fetching containers/podman tag list from GitHub..." >&2
+    echo "==> Fetching podman-container-tools/podman tag list from GitHub..." >&2
 
     local all_tags="" page fetched fetch_status page_tag_count
     local -r max_pages=10   # 10 x 100 = 1000 tags, comfortably beyond podman's actual count
@@ -213,7 +213,7 @@ fetch_podman_tags_cached() {
         # check $fetch_status below. Commands in an if-condition are
         # exempt from -e, which is exactly what lets us handle the
         # failure gracefully here instead.
-        if fetched="$(curl -fsSL "https://api.github.com/repos/containers/podman/tags?per_page=100&page=${page}" \
+        if fetched="$(curl -fsSL "https://api.github.com/repos/podman-container-tools/podman/tags?per_page=100&page=${page}" \
             | grep -oP '"name":\s*"\K[^"]+')"; then
             fetch_status=0
         else
@@ -250,7 +250,7 @@ fetch_podman_tags_cached() {
 
 # validate_podman_tag <normalized_tag>
 #
-# Confirms the tag exists in containers/podman's GitHub tags.
+# Confirms the tag exists in podman-container-tools/podman's GitHub tags.
 validate_podman_tag() {
     local tag="$1"
 
@@ -260,7 +260,7 @@ validate_podman_tag() {
         return 0
     fi
 
-    echo "ERROR: Tag '$tag' not found in containers/podman releases." >&2
+    echo "ERROR: Tag '$tag' not found in podman-container-tools/podman releases." >&2
     echo "       Closest matches:" >&2
     grep -F "${tag:0:4}" <<< "$PODMAN_TAGS_CACHE" | head -5 | sed 's/^/         /' >&2
     return 1
@@ -268,7 +268,7 @@ validate_podman_tag() {
 
 # resolve_latest_podman_tag
 #
-# Returns the newest non-prerelease tag for containers/podman.
+# Returns the newest non-prerelease tag for podman-container-tools/podman.
 resolve_latest_podman_tag() {
     fetch_podman_tags_cached || return 1
     grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$PODMAN_TAGS_CACHE" | sort -V | tail -1
@@ -590,7 +590,7 @@ fi
 
 validate_podman_tag "$TAG" || exit 1
 
-REPO_URL="https://github.com/containers/podman"
+REPO_URL="https://github.com/podman-container-tools/podman"
 TAG_VERSION="${TAG#v}"
 
 # Define versioning requirements
