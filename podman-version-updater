@@ -182,7 +182,7 @@ normalize_podman_version() {
 #
 # Populates PODMAN_TAGS_CACHE on first call, reused by subsequent calls
 # within the same script run. Paginates through GitHub's tags API
-# (capped at 100 per page — a hard GitHub limit) since podman-container-tools/podman
+# (capped at 100 per page — a hard GitHub limit) since containers/podman
 # has well over 100 tags across its full release history; a single
 # unpaginated request would only see the most recent ~100 and silently
 # report older tags as nonexistent. Stops at max_pages as a safety net
@@ -201,7 +201,7 @@ fetch_podman_tags_cached() {
         return 0
     fi
 
-    echo "==> Fetching podman-container-tools/podman tag list from GitHub..." >&2
+    echo "==> Fetching containers/podman tag list from GitHub..." >&2
 
     local all_tags="" page fetched fetch_status page_tag_count
     local -r max_pages=10   # 10 x 100 = 1000 tags, comfortably beyond podman's actual count
@@ -213,7 +213,7 @@ fetch_podman_tags_cached() {
         # check $fetch_status below. Commands in an if-condition are
         # exempt from -e, which is exactly what lets us handle the
         # failure gracefully here instead.
-        if fetched="$(curl -fsSL "https://api.github.com/repos/podman-container-tools/podman/tags?per_page=100&page=${page}" \
+        if fetched="$(curl -fsSL "https://api.github.com/repos/containers/podman/tags?per_page=100&page=${page}" \
             | grep -oP '"name":\s*"\K[^"]+')"; then
             fetch_status=0
         else
@@ -250,7 +250,7 @@ fetch_podman_tags_cached() {
 
 # validate_podman_tag <normalized_tag>
 #
-# Confirms the tag exists in podman-container-tools/podman's GitHub tags.
+# Confirms the tag exists in containers/podman's GitHub tags.
 validate_podman_tag() {
     local tag="$1"
 
@@ -260,7 +260,7 @@ validate_podman_tag() {
         return 0
     fi
 
-    echo "ERROR: Tag '$tag' not found in podman-container-tools/podman releases." >&2
+    echo "ERROR: Tag '$tag' not found in containers/podman releases." >&2
     echo "       Closest matches:" >&2
     grep -F "${tag:0:4}" <<< "$PODMAN_TAGS_CACHE" | head -5 | sed 's/^/         /' >&2
     return 1
@@ -268,7 +268,7 @@ validate_podman_tag() {
 
 # resolve_latest_podman_tag
 #
-# Returns the newest non-prerelease tag for podman-container-tools/podman.
+# Returns the newest non-prerelease tag for containers/podman.
 resolve_latest_podman_tag() {
     fetch_podman_tags_cached || return 1
     grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$PODMAN_TAGS_CACHE" | sort -V | tail -1
@@ -590,7 +590,7 @@ fi
 
 validate_podman_tag "$TAG" || exit 1
 
-REPO_URL="https://github.com/podman-container-tools/podman"
+REPO_URL="https://github.com/containers/podman"
 TAG_VERSION="${TAG#v}"
 
 # Define versioning requirements
@@ -824,7 +824,7 @@ PRERM
         # Real shared-library deps for conmon on Ubuntu 26.04, resolved
         # once via `ldd bin/conmon` + `dpkg -S` (Task 1 verification step).
         build_and_install_deb "conmon" "${CONMON_VERSION}" "$conmon_stage" \
-            "libc6" "libglib2.0-0"
+            "libc6" "libglib2.0-0t64"
 
         cd /
         rm -rf "$conmon_dir"
@@ -859,7 +859,7 @@ PRERM
         sudo apt-mark hold fuse-overlayfs 2>/dev/null || true
 
         build_and_install_deb "fuse-overlayfs-custom" "${FUSE_OVERLAYFS_VERSION}" "$fuseov_stage" \
-            "libc6" "libfuse3-3"
+            "libc6" "libfuse3-4"
 
         cd /
         rm -rf "$fuseov_dir"
@@ -901,23 +901,66 @@ PRERM
     # Staged directly and handed to build_and_install_deb so it still gets
     # dpkg tracking (`dpkg -L containers-common`, `apt remove
     # containers-common`) even though there's nothing to compile.
+    #
+    # Upstream sources:
+    #   containers/common  -> containers.conf, registries.conf, seccomp profiles
+    #   containers/storage -> storage.conf
     echo "==> Setting up containers configuration for rootless Podman v6..."
     local common_stage
     common_stage="$(mktemp -d /tmp/containers-common-pkg-XXXXXX)"
     mkdir -p "$common_stage/etc/containers" "$common_stage/usr/share/containers/seccomp"
 
-    local COMMON_TMPDIR="/tmp/container-libs-common"
-    rm -rf "${COMMON_TMPDIR}"
-    if git clone --depth 1 --branch "${COMMON_TAG}" https://github.com/podman-container-tools/container-libs.git "${COMMON_TMPDIR}"; then
-        cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" "$common_stage/etc/containers/containers.conf" || echo "Warning: containers.conf copy failed; continuing build..." >&2
-        cp "${COMMON_TMPDIR}/common/pkg/config/containers.conf" "$common_stage/usr/share/containers/containers.conf" || echo "Warning: containers.conf copy failed; continuing build..." >&2
-        cp "${COMMON_TMPDIR}/image/registries.conf" "$common_stage/etc/containers/registries.conf" || echo "Warning: registries.conf copy failed; continuing build..." >&2
-        cp "${COMMON_TMPDIR}/storage/storage.conf" "$common_stage/etc/containers/storage.conf" || echo "Warning: storage.conf copy failed; continuing build..." >&2
-        cp "${COMMON_TMPDIR}/common/pkg/seccomp/"*.json "$common_stage/usr/share/containers/seccomp/" 2>/dev/null || true
-        rm -rf "${COMMON_TMPDIR}"
-        echo "Staged official containers-common ${COMMON_TAG} configs."
+    local COMMON_TMPDIR="/tmp/containers-common-upstream"
+    local STORAGE_TMPDIR="/tmp/containers-storage-upstream"
+    rm -rf "${COMMON_TMPDIR}" "${STORAGE_TMPDIR}"
+
+    local common_cloned=false storage_cloned=false
+    local common_version="${COMMON_TAG##*/v}"
+
+    # Clone containers/common for containers.conf, registries.conf, seccomp
+    if git clone --depth 1 --branch "v${common_version}" https://github.com/containers/common.git "${COMMON_TMPDIR}"; then
+        common_cloned=true
     else
-        echo "Tag ${COMMON_TAG} not found; creating minimal rootless config."
+        echo "Warning: could not clone containers/common v${common_version}; will use fallback configs." >&2
+    fi
+
+    # Clone containers/storage for storage.conf
+    if git clone --depth 1 --branch "v${common_version}" https://github.com/containers/storage.git "${STORAGE_TMPDIR}"; then
+        storage_cloned=true
+    else
+        echo "Warning: could not clone containers/storage v${common_version}; will use fallback storage config." >&2
+    fi
+
+    if [[ "$common_cloned" == true ]]; then
+        cp "${COMMON_TMPDIR}/pkg/config/containers.conf" "$common_stage/etc/containers/containers.conf" 2>/dev/null || echo "Warning: containers.conf copy failed; continuing build..." >&2
+        cp "${COMMON_TMPDIR}/pkg/config/containers.conf" "$common_stage/usr/share/containers/containers.conf" 2>/dev/null || echo "Warning: containers.conf (share) copy failed; continuing build..." >&2
+        cp "${COMMON_TMPDIR}/pkg/seccomp/"*.json "$common_stage/usr/share/containers/seccomp/" 2>/dev/null || true
+
+        # registries.conf lives in containers/common at pkg/config/registries.conf
+        # (or registries.conf if at repo root in older tags)
+        if [[ -f "${COMMON_TMPDIR}/pkg/config/registries.conf" ]]; then
+            cp "${COMMON_TMPDIR}/pkg/config/registries.conf" "$common_stage/etc/containers/registries.conf" 2>/dev/null || echo "Warning: registries.conf copy failed; continuing build..." >&2
+        elif [[ -f "${COMMON_TMPDIR}/registries.conf" ]]; then
+            cp "${COMMON_TMPDIR}/registries.conf" "$common_stage/etc/containers/registries.conf" 2>/dev/null || echo "Warning: registries.conf copy failed; continuing build..." >&2
+        fi
+
+        rm -rf "${COMMON_TMPDIR}"
+        echo "Staged official containers/common v${common_version} configs."
+    fi
+
+    if [[ "$storage_cloned" == true ]]; then
+        if [[ -f "${STORAGE_TMPDIR}/storage.conf" ]]; then
+            cp "${STORAGE_TMPDIR}/storage.conf" "$common_stage/etc/containers/storage.conf" 2>/dev/null || echo "Warning: storage.conf copy failed; continuing build..." >&2
+        elif [[ -f "${STORAGE_TMPDIR}/storage/storage.conf" ]]; then
+            cp "${STORAGE_TMPDIR}/storage/storage.conf" "$common_stage/etc/containers/storage.conf" 2>/dev/null || echo "Warning: storage.conf copy failed; continuing build..." >&2
+        fi
+        rm -rf "${STORAGE_TMPDIR}"
+        echo "Staged official containers/storage v${common_version} configs."
+    fi
+
+    # Fallback: if either clone failed, write minimal configs for whatever is missing
+    if [[ ! -f "$common_stage/etc/containers/containers.conf" ]]; then
+        echo "Creating minimal containers.conf fallback..."
         cat <<'CFG' > "$common_stage/etc/containers/containers.conf"
 [engine]
 events_logger = "journald"
@@ -925,6 +968,10 @@ runtime = "crun"
 [network]
 network_backend = "netavark"
 CFG
+    fi
+
+    if [[ ! -f "$common_stage/etc/containers/storage.conf" ]]; then
+        echo "Creating minimal storage.conf fallback..."
         local USER_ID
         USER_ID=$(id -u)
         cat <<STOCFG > "$common_stage/etc/containers/storage.conf"
@@ -933,8 +980,11 @@ driver = "overlay"
 runroot = "/run/user/${USER_ID}/containers"
 graphroot = "/home/${USER}/.local/share/containers/storage"
 STOCFG
+    fi
+
+    # Ensure share copy exists
+    if [[ ! -f "$common_stage/usr/share/containers/containers.conf" && -f "$common_stage/etc/containers/containers.conf" ]]; then
         cp "$common_stage/etc/containers/containers.conf" "$common_stage/usr/share/containers/containers.conf"
-        echo "Staged minimal rootless config."
     fi
 
     # Config-only package: pull the COMMON_TAG version portion for the
@@ -1156,7 +1206,7 @@ chmod 755 "$PODMAN_POSTINST" "$PODMAN_PRERM"
 POSTINST_SCRIPT="$PODMAN_POSTINST" PRERM_SCRIPT="$PODMAN_PRERM" \
     build_and_install_deb "podman" "${TAG_VERSION}" "$PODMAN_STAGE" \
     "libgpgme11 | libgpgme45" "libassuan0 | libassuan3 | libassuan9" "libseccomp2" "libdevmapper1.02.1" \
-    "libglib2.0-0" "libsystemd0" "libselinux1" "libapparmor1" "libbtrfs0"
+    "libglib2.0-0t64" "libsystemd0" "libselinux1" "libapparmor1" "libbtrfs0t64"
 
 rm -f "$PODMAN_POSTINST" "$PODMAN_PRERM"
 echo "==> System-level Podman services masked. User-level Quadlet services unaffected."
