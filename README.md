@@ -70,14 +70,14 @@ Run the script with a version string — not a URL. Accepted formats:
 
 | Input | Resolves to |
 |---|---|
-| `v6.0.1` | `v6.0.1` |
-| `6.0.1` | `v6.0.1` |
-| `601` (exactly 3 digits) | `v6.0.1` |
+| `v6.0.2` | `v6.0.2` |
+| `6.0.2` | `v6.0.2` |
+| `602` (exactly 3 digits) | `v6.0.2` |
 | `latest` | newest non-prerelease tag on GitHub |
 | `v6.0.1-rc1` | `v6.0.1-rc1` (prerelease suffixes pass through) |
 | `6.0.1-beta` | `v6.0.1-beta` |
 
-Compact digit input only works for exactly 3 digits — anything longer or ambiguous (`6010`, `61`) is rejected; use dotted notation instead. Every version is checked against `containers/podman`'s real GitHub tags before anything is built, so a typo fails fast instead of cloning a branch that doesn't exist.
+Compact digit input only works for exactly 3 digits — anything longer or ambiguous (`6020`, `62`) is rejected; use dotted notation instead. Every version is checked against `podman`'s real GitHub tags before anything is built, so a typo fails fast instead of cloning a branch that doesn't exist.
 
 Examples:
 
@@ -85,9 +85,9 @@ Examples:
 
     ./podman-version-updater.sh 5.8.5
 
-#### Upgrade to Podman 6.0.1
+#### Upgrade to Podman 6.0.2
 
-    ./podman-version-updater.sh 601
+    ./podman-version-updater.sh 602
 
 #### Upgrade to whatever's newest
 
