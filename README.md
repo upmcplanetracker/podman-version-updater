@@ -1,4 +1,4 @@
-[Podman](https://github.com/containers/podman) Version Updater (Source Build, apt-managed)
+[Podman](https://github.com/podman-container-tools/podman) Version Updater (Source Build, apt-managed)
 ============================================================================================
 
 **Build any Podman release from GitHub for Ubuntu 26.04 and install Podman and its dependencies as an apt-tracked packages.**
@@ -32,7 +32,7 @@ This script will only run on Ubuntu 26.04 and 25.10. Other versions and OSes may
 
 #### Dependency version check is YOUR job
 
-The updater script installs build dependencies via `apt`, but it does **not** verify whether those packages meet the minimum versions required by the Podman release you are building. Always read the [official build instructions](https://github.com/containers/podman/blob/main/install.md) for your target tag and ensure your system's libraries are new enough.
+The updater script installs build dependencies via `apt`, but it does **not** verify whether those packages meet the minimum versions required by the Podman release you are building. Always read the [official build instructions](https://github.com/podman-container-tools/podman/blob/main/install.md) for your target tag and ensure your system's libraries are new enough.
 
 * * *
 
