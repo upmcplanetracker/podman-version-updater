@@ -134,8 +134,8 @@ build_and_install_deb() {
 
 # normalize_podman_version <input>
 #
-# Accepts: v6.0.1 | 6.0.1 | 601 | latest | v6.0.1-rc1 | 6.0.1-beta
-# Rejects: any other compact digit run (6010, 61, etc.) — ambiguous
+# Accepts: v6.0.2 | 6.0.2 | 602 | latest | v6.0.1-rc1 | 6.0.1-beta
+# Rejects: any other compact digit run (6020, 62, etc.) — ambiguous
 # splits are refused rather than guessed at; the caller must use
 # dotted notation for anything that isn't exactly 3 compact digits.
 #
@@ -165,12 +165,12 @@ normalize_podman_version() {
         # Already dotted: X.Y.Z
         normalized_base="$base"
     elif [[ "$base" =~ ^[0-9]{3}$ ]]; then
-        # Exactly 3 compact digits: 601 -> 6.0.1
+        # Exactly 3 compact digits: 602 -> 6.0.2
         normalized_base="${base:0:1}.${base:1:1}.${base:2:1}"
     else
         echo "ERROR: Cannot parse version '$input'." >&2
-        echo "       Accepted formats: v6.0.1, 6.0.1, 601, latest, v6.0.1-rc1" >&2
-        echo "       Compact digit input must be exactly 3 digits (e.g. 601)." >&2
+        echo "       Accepted formats: v6.0.2, 6.0.2, 602, latest, v6.0.1-rc1" >&2
+        echo "       Compact digit input must be exactly 3 digits (e.g. 602)." >&2
         echo "       For anything else, use dotted notation (e.g. 6.10.0)." >&2
         return 1
     fi
@@ -494,7 +494,7 @@ Usage:
   Rollback to stock:  $0 --rollback-to-stock
 
   <VERSION> accepts any of:
-      v6.0.1        6.0.1        601 (exactly 3 digits)
+      v6.0.2        6.0.2        602 (exactly 3 digits)
       latest        v6.0.1-rc1   6.0.1-beta
 
   Rollback rebuilds the given older version and reinstalls it via apt
