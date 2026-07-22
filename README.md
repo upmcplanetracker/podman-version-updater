@@ -57,12 +57,12 @@ Clone the repository:
 
     git clone https://github.com/upmcplanetracker/podman-version-updater.git
     cd podman-version-updater
-    chmod +x podman-version-updater.sh
+    chmod +x podman-version-updater
 
 Or download just the required file:
 
-    wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/podman-version-updater.sh
-    chmod +x podman-version-updater.sh
+    wget https://raw.githubusercontent.com/upmcplanetracker/podman-version-updater/main/podman-version-updater
+    chmod +x podman-version-updater
 
 ### Upgrade to any Podman version > 5.7.0
 
@@ -83,15 +83,15 @@ Examples:
 
 #### Upgrade to Podman 5.8.5
 
-    ./podman-version-updater.sh 5.8.5
+    ./podman-version-updater 5.8.5
 
 #### Upgrade to Podman 6.0.2
 
-    ./podman-version-updater.sh 602
+    ./podman-version-updater 602
 
 #### Upgrade to whatever's newest
 
-    ./podman-version-updater.sh latest
+    ./podman-version-updater latest
 
 The script automatically:
 
@@ -103,7 +103,7 @@ The script automatically:
 *   Packages the rootless **containers-common** configuration files (`storage.conf`, `containers.conf`, `registries.conf`, seccomp profiles) as a config-only `.deb` and installs it into `/etc/containers` and `/usr/share/containers`.
 *   Then builds and installs Podman itself the same way, with a postinst hook that masks the system-level services (see below).
 
-Exact target versions for each dependency are defined as variables at the top of `podman-version-updater.sh` — edit them there when new upstream releases come out. The script skips rebuilding any dependency already installed at the target version (checked via `dpkg-query`, not by probing `$PATH`).
+Exact target versions for each dependency are defined as variables at the top of `podman-version-updater` — edit them there when new upstream releases come out. The script skips rebuilding any dependency already installed at the target version (checked via `dpkg-query`, not by probing `$PATH`).
 
 The entire process is handled in one run, ensuring the network stack and Podman are always synchronised.
 
@@ -172,13 +172,13 @@ There are two distinct rollback modes now, because there's no kept `.deb` file t
 
 ### Rebuild and reinstall an older version
 
-    ./podman-version-updater.sh --rollback 5.8.5
+    ./podman-version-updater --rollback 5.8.5
 
 This re-runs the normal build → package → apt-install pipeline targeting the older version you specify. `apt install ./podman-<version>.deb` overwrites the currently installed package — dpkg treats this as a plain reinstall/downgrade of the same package name, no different from installing any other version. This is slower than restoring a cached file would be, but there's nothing to store or clean up.
 
 ### Revert entirely to Ubuntu's stock packages
 
-    ./podman-version-updater.sh --rollback-to-stock
+    ./podman-version-updater --rollback-to-stock
 
 This releases the `apt-mark hold` on every custom-built component (`podman`, `conmon`, `crun`, `netavark`, `aardvark-dns`, `fuse-overlayfs`, `containers-common`) and reinstalls whatever version Ubuntu's own repo currently provides via `apt install --reinstall`. This is the fast path with no rebuild and no waiting. It's the equivalent of the old `--rollback` behavior plus the manual cleanup commands that used to be a separate step.
 
