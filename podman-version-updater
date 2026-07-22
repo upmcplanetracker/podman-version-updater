@@ -855,7 +855,7 @@ PRERM
         git clone --branch "v${FUSE_OVERLAYFS_VERSION}" --depth 1 https://github.com/containers/fuse-overlayfs.git
         cd fuse-overlayfs
         sh autogen.sh
-        ./configure
+        ./configure --prefix=/usr
         make
 
         echo "==> Staging fuse-overlayfs for packaging..."
@@ -1156,7 +1156,7 @@ git clone "$REPO_URL" .
 git checkout "$TAG"
 
 echo "==> Building Podman from source using all available cores..."
-make BUILDTAGS="selinux seccomp systemd exclude_graphdriver_devicemapper" -j"$(nproc)"
+make PREFIX=/usr BINDIR=/usr/bin BUILDTAGS="selinux seccomp systemd exclude_graphdriver_devicemapper" -j"$(nproc)"
 
 echo "==> Stopping all containers and Podman services safely..."
 if [[ "$QUADLET_UNIT_COUNT" -gt 0 ]]; then
@@ -1173,7 +1173,7 @@ systemctl --user stop podman.socket podman.service 2>/dev/null || true
 
 echo "==> Staging podman for packaging..."
 PODMAN_STAGE="$(mktemp -d /tmp/podman-pkg-XXXXXX)"
-make DESTDIR="$PODMAN_STAGE" PREFIX=/usr install
+make DESTDIR="$PODMAN_STAGE" PREFIX=/usr BINDIR=/usr/bin install
 
 PODMAN_POSTINST="$(mktemp /tmp/podman-postinst-XXXXXX.sh)"
 PODMAN_PRERM="$(mktemp /tmp/podman-prerm-XXXXXX.sh)"
