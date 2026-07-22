@@ -834,8 +834,17 @@ PRERM
     # ---------- fuse-overlayfs ----------
     # Packaged as fuse-overlayfs-custom to avoid same-path ownership
     # conflict with Ubuntu's stock fuse-overlayfs package. The binary
-    # still lives at /usr/bin/fuse-overlayfs; the stock package is
-    # held to prevent apt from overwriting it.
+    # still lives at /usr/bin/fuse-overlayfs.
+    #
+    # Remove stock fuse-overlayfs first if present — dpkg cannot have two
+    # packages owning the same path, and our custom package must own
+    # /usr/bin/fuse-overlayfs.
+    if dpkg-query -W fuse-overlayfs &>/dev/null; then
+        echo "==> Removing stock fuse-overlayfs package to prevent path conflict..."
+        sudo apt-mark unhold fuse-overlayfs 2>/dev/null || true
+        sudo apt-get remove -y fuse-overlayfs
+    fi
+
     if dpkg-query -W -f='${Version}' fuse-overlayfs-custom 2>/dev/null | grep -qF "${FUSE_OVERLAYFS_VERSION}-1"; then
         echo "==> fuse-overlayfs-custom ${FUSE_OVERLAYFS_VERSION} already installed via apt, skipping."
     else
@@ -854,9 +863,6 @@ PRERM
         fuseov_stage="$(mktemp -d /tmp/fuse-overlayfs-pkg-XXXXXX)"
         mkdir -p "$fuseov_stage/usr/bin"
         cp fuse-overlayfs "$fuseov_stage/usr/bin/fuse-overlayfs"
-
-        # Hold the stock package so it never overwrites our path
-        sudo apt-mark hold fuse-overlayfs 2>/dev/null || true
 
         build_and_install_deb "fuse-overlayfs-custom" "${FUSE_OVERLAYFS_VERSION}" "$fuseov_stage" \
             "libc6" "libfuse3-4"
