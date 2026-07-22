@@ -122,7 +122,7 @@ build_and_install_deb() {
     fpm "${fpm_args[@]}" .
 
     echo "==> Installing ${component} ${version} via apt..."
-    sudo apt-get install -y "$deb_path"
+    sudo apt-get install -y --allow-downgrades "$deb_path"
 
     echo "==> Holding ${component} at ${version} (apt-mark hold)..."
     sudo apt-mark hold "$component" >/dev/null
